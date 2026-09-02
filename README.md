@@ -27,13 +27,7 @@ The result across our test suite: **42% bitrate reduction** with a **+23% improv
 
 ---
 
-## The problem with existing approaches
 
-| Approach | What it does wrong |
-|----------|--------------------|
-| Uniform ABR (HLS/DASH) | Compresses every pixel identically — perceptually blind |
-| Static ROI | Manually defined regions that don't adapt to scene changes |
-| SemanticStream | Dynamic, object-aware, frame-by-frame quality allocation |
 
 ---
 
@@ -210,21 +204,10 @@ The system includes 5 built-in bandwidth profiles for testing encoder behaviour 
 
 ---
 
-## Team
 
-**Mayukh Banerjee** · 23BIT0061  
-**Shubham Kumar** · 23BIT0079  
-**Yashwant Sahoo** · 23BIT0115  
-
-B.Tech Information Technology — VIT Vellore  
-Guide: Dr. Balasubramani M, Department of IT
-
----
 
 <div align="center">
 
-© 2026 Mayukh Banerjee, Shubham Kumar, Yashwant Sahoo · All Rights Reserved
 
-*Patent pending — novel metrics and rate control methodology are proprietary.*
 
 </div>
