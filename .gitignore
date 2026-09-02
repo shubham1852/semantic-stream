@@ -1,0 +1,91 @@
+# ==============================================================================
+# SemanticStream — .gitignore
+# ==============================================================================
+
+# ── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+htmlcov/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+*.egg-info/
+.eggs/
+
+# ── Environment ─────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Database ───────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Storage / Media ────────────────────────────────────────────────────────────
+backend/storage/uploads/*
+backend/storage/processed/*
+backend/storage/frames/*
+backend/storage/reports/*
+!backend/storage/uploads/.gitkeep
+!backend/storage/processed/.gitkeep
+!backend/storage/frames/.gitkeep
+!backend/storage/reports/.gitkeep
+
+# ── AI Model Weights ────────────────────────────────────────────────────────────
+backend/models/weights/*.onnx
+backend/models/weights/*.pt
+
+# ── Node / Frontend ─────────────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ── IDE ────────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Docker ─────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Logs ───────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Pytest ─────────────────────────────────────────────────────────────────────
+.pytest_cache/
+backend/.pytest_cache/
+
+# ── Backend venv (may live inside backend/) ────────────────────────────────────
+backend/.venv/
+backend/venv/

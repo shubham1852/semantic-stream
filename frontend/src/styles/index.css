@@ -1,0 +1,286 @@
+/* =============================================================================
+   SemanticStream — Global Styles
+   Design tokens live in tailwind.config.js; this file provides:
+   - Tailwind directives
+   - @layer base overrides
+   - Custom utility classes (glass, glow, tier badges)
+   - Scrollbar styling
+   - Animation keyframes referenced by Tailwind config
+============================================================================= */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base Layer ────────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --color-bg-primary:    #0A0E1A;
+    --color-bg-secondary:  #0F1426;
+    --color-bg-card:       #151C34;
+    --color-accent:        #4F46E5;
+    --color-accent-light:  #818CF8;
+    --color-data-green:    #00FF87;
+    --color-data-amber:    #F59E0B;
+    --color-data-red:      #EF4444;
+    --color-data-blue:     #60A5FA;
+    --color-text-primary:  #F0F0FF;
+    --color-text-muted:    #8892A4;
+    --color-border:        rgba(79, 70, 229, 0.18);
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Space Grotesk', sans-serif;
+    @apply tracking-tight;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  * {
+    border-color: var(--color-border);
+  }
+}
+
+/* ── Custom Components ─────────────────────────────────────────────────────── */
+@layer components {
+  /* Glass morphism card */
+  .glass-card {
+    background: rgba(21, 28, 52, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(79, 70, 229, 0.18);
+    border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .glass-card:hover {
+    box-shadow: 0 8px 32px rgba(79, 70, 229, 0.25);
+    border-color: rgba(79, 70, 229, 0.35);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Accent glow button */
+  .btn-primary {
+    @apply bg-accent text-white font-semibold rounded-btn px-5 py-2.5 text-sm;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 20px rgba(79, 70, 229, 0.45);
+    @apply bg-accent-light;
+  }
+
+  .btn-primary:active {
+    transform: scale(0.97);
+  }
+
+  /* Ghost button */
+  .btn-ghost {
+    @apply text-text-muted border border-border-subtle rounded-btn px-5 py-2.5 text-sm font-medium;
+    background: transparent;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .btn-ghost:hover {
+    @apply text-text-primary border-accent-light;
+    background: rgba(79, 70, 229, 0.08);
+  }
+
+  /* Stat card */
+  .stat-card {
+    @apply glass-card p-6 flex flex-col gap-2;
+  }
+
+  /* Priority tier pills */
+  .tier-p1 { background: rgba(0, 255, 135, 0.15); color: #00FF87; border: 1px solid rgba(0, 255, 135, 0.3); }
+  .tier-p2 { background: rgba(74, 222, 128, 0.15); color: #4ADE80; border: 1px solid rgba(74, 222, 128, 0.3); }
+  .tier-p3 { background: rgba(245, 158, 11, 0.15); color: #F59E0B; border: 1px solid rgba(245, 158, 11, 0.3); }
+  .tier-p4 { background: rgba(129, 140, 248, 0.15); color: #818CF8; border: 1px solid rgba(129, 140, 248, 0.3); }
+  .tier-p5 { background: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+  .tier-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-badge text-xs font-mono font-medium;
+  }
+
+  /* Live indicator dot */
+  .live-dot {
+    @apply inline-block w-2 h-2 rounded-full bg-data-green;
+    animation: livePulse 1.4s ease-in-out infinite;
+  }
+
+  /* Input field */
+  .input-field {
+    @apply w-full rounded-btn text-sm text-text-primary placeholder-text-muted;
+    background: rgba(15, 20, 38, 0.8);
+    border: 1px solid rgba(79, 70, 229, 0.25);
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+
+  .input-field:focus {
+    border-color: rgba(79, 70, 229, 0.6);
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+  }
+
+  /* Select dropdown */
+  .select-field {
+    @apply input-field appearance-none;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%238892A4' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 16px;
+    padding-right: 36px;
+  }
+
+  /* Table styles */
+  .data-table {
+    @apply w-full text-sm;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .data-table th {
+    @apply text-left text-text-muted font-medium text-xs uppercase tracking-widest py-3 px-4;
+    border-bottom: 1px solid rgba(79, 70, 229, 0.15);
+  }
+
+  .data-table td {
+    @apply py-3 px-4 text-text-primary;
+    border-bottom: 1px solid rgba(79, 70, 229, 0.08);
+  }
+
+  .data-table tr:hover td {
+    background: rgba(79, 70, 229, 0.05);
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    background: linear-gradient(135deg, #818CF8, #00FF87);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* ── Utility Layer ─────────────────────────────────────────────────────────── */
+@layer utilities {
+  /* Glow utilities */
+  .glow-accent  { box-shadow: 0 0 20px rgba(79, 70, 229, 0.4); }
+  .glow-green   { box-shadow: 0 0 20px rgba(0, 255, 135, 0.3); }
+  .glow-amber   { box-shadow: 0 0 20px rgba(245, 158, 11, 0.3); }
+
+  /* Scanline effect overlay */
+  .scanlines::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 255, 135, 0.015) 2px,
+      rgba(0, 255, 135, 0.015) 4px
+    );
+    pointer-events: none;
+    border-radius: inherit;
+  }
+}
+
+/* ── Custom Scrollbar ──────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(79, 70, 229, 0.4);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 70, 229, 0.7);
+}
+
+/* ── Keyframe Animations ───────────────────────────────────────────────────── */
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(1.4); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(79, 70, 229, 0.3); }
+  50%       { box-shadow: 0 0 40px rgba(79, 70, 229, 0.6); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes progressPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.7; }
+}
+
+@keyframes scan {
+  0%   { top: -2px; }
+  100% { top: 100%; }
+}
+
+
+/* ── Recharts Overrides ────────────────────────────────────────────────────── */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(79, 70, 229, 0.1);
+}
+
+.recharts-tooltip-wrapper {
+  outline: none;
+}
+
+.recharts-default-tooltip {
+  background: rgba(15, 20, 38, 0.95) !important;
+  border: 1px solid rgba(79, 70, 229, 0.3) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+  backdrop-filter: blur(8px);
+}
+
+.recharts-legend-item-text {
+  color: #8892A4 !important;
+  font-size: 12px !important;
+  font-family: 'Inter', sans-serif !important;
+}
