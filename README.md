@@ -10,7 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-teal?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)](https://reactjs.org)
 [![YOLOv8](https://img.shields.io/badge/YOLOv8-ONNX-purple?style=flat-square)](https://ultralytics.com)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red?style=flat-square)](#)
 
 </div>
 
@@ -56,35 +56,13 @@ Every frame gets its own spatially non-uniform quantization map. The more import
 
 ---
 
-## What's novel here
-
-**SPQI — Semantic Perceptual Quality Index**
-
-A new quality metric that weights SSIM by semantic importance rather than treating all pixels equally:
-
-```
-SPQI = Σ(priority_weight_i × SSIM_i) / Σ(priority_weight_i)
-```
-
-A face losing quality hits SPQI harder than a blurry background. Standard SSIM can't tell the difference.
-
-**Closed-loop rate control**
-
-If the P1 (face) region SPQI drops below 0.75, the encoder automatically steals bits from the P5 budget and reallocates. The system self-corrects without manual intervention.
-
-**SEES — Semantic Encoding Efficiency Score**
-
-Measures how much compute was saved by skipping inference on static background regions that haven't changed since the last keyframe.
-
----
-
 ## Running it locally
 
 You need Python 3.11+, Node 18+, and FFmpeg.
 
 ```bash
 # Clone
-git clone https://github.com/yourusername/semantic-stream.git
+git clone https://github.com/shubham1852/semantic-stream.git
 cd semantic-stream
 
 # Backend
@@ -194,6 +172,6 @@ Guide: Dr. Balasubramani M, Department of IT, VIT Vellore.
 
 <div align="center">
 
-MIT License · VIT Vellore · 2026
+© 2026 Mayukh Banerjee, Shubham Kumar, Yashwant Sahoo · VIT Vellore · All Rights Reserved
 
 </div>
