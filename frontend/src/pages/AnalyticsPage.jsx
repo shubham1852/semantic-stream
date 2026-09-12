@@ -11,7 +11,7 @@ import { TrendingUp, Award, BarChart2, Eye, Zap, AlertCircle } from 'lucide-reac
 import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'
 import Spinner from '../components/ui/Spinner'
-import { StatusBadge, TierBadge } from '../components/ui/Badge'
+import { TierBadge } from '../components/ui/Badge'
 import SpqiChart from '../components/charts/SpqiChart'
 import ConfidenceChart from '../components/charts/ConfidenceChart'
 import TierAllocationChart from '../components/charts/TierAllocationChart'
@@ -24,7 +24,7 @@ import { getFrame } from '../api/stream'
 import useAppStore from '../store/useAppStore'
 
 /* ─── Strategy comparison card ──────────────────────────────── */
-function StrategyCard({ name, label, color, metrics, isWinner }) {
+function StrategyCard({ label, color, metrics, isWinner }) {
   if (!metrics) return (
     <div className="glass-card rounded-card p-5 opacity-50">
       <div className="text-sm font-medium mb-1" style={{ color }}>{label}</div>
@@ -79,7 +79,8 @@ function StrategyCard({ name, label, color, metrics, isWinner }) {
 /* ─── Main ───────────────────────────────────────────────────── */
 export default function AnalyticsPage() {
   const [searchParams] = useSearchParams()
-  const jobId = searchParams.get('jobId') || useAppStore((s) => s.analysis.jobId)
+  const storeJobId = useAppStore((s) => s.analysis.jobId)
+  const jobId = searchParams.get('jobId') || storeJobId
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)

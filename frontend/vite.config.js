@@ -13,6 +13,12 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      // Proxy health check to FastAPI backend
+      '/health': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      },
       // Proxy WebSocket connections to FastAPI backend
       '/ws': {
         target: 'ws://localhost:8000',

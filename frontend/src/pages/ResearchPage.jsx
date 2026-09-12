@@ -8,8 +8,7 @@
 import 'katex/dist/katex.min.css'
 import katex from 'katex'
 import { useMemo } from 'react'
-import { Link } from 'react-router-dom'
-import { Github, BookOpen, FlaskConical, Users, Award, FileText } from 'lucide-react'
+import { Github, BookOpen, FlaskConical, Users, Award } from 'lucide-react'
 import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'
 import { TierBadge } from '../components/ui/Badge'
@@ -210,8 +209,8 @@ export default function ResearchPage() {
           </div>
           <div className="mt-3 text-sm text-text-muted space-y-1">
             <p>where <em className="text-text-primary">i</em> indexes each detected semantic region,</p>
-            <p><em className="text-text-primary">w_i</em> ∈ {'{'} P1: 1.0, P2: 0.8, P3: 0.6, P4: 0.4, P5: 0.1 {'}'} is the region's priority weight,</p>
-            <p><em className="text-text-primary">SSIM(R_i, R_i')</em> is the structural similarity between the original and compressed pixels in region <em>i</em>.</p>
+            <p><em className="text-text-primary">w_i</em> &#8712; {'{'} P1: 1.0, P2: 0.8, P3: 0.6, P4: 0.4, P5: 0.1 {'}'} is the region&apos;s priority weight,</p>
+            <p><em className="text-text-primary">SSIM(R_i, R_i&apos;)</em> is the structural similarity between the original and compressed pixels in region <em>i</em>.</p>
           </div>
         </Card>
 
@@ -230,7 +229,7 @@ export default function ResearchPage() {
           </div>
           <div className="mt-3 text-sm text-text-muted space-y-1">
             <p><em className="text-text-primary">T_baseline</em>: wall-clock time for full YOLO inference on every region of every frame,</p>
-            <p><em className="text-text-primary">T_semantic</em>: wall-clock time with SemanticStream's temporal propagation (background regions skip inference),</p>
+            <p><em className="text-text-primary">T_semantic</em>: wall-clock time with SemanticStream&apos;s temporal propagation (background regions skip inference),</p>
             <p>measured with <code className="font-mono text-xs text-accent-light">time.perf_counter()</code> per frame.</p>
           </div>
         </Card>

@@ -4,7 +4,7 @@
  * Sections: QP Override Table, Thresholds, Feature Toggles, Appearance.
  */
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Save, RotateCcw, Settings, Sliders, ToggleLeft, Palette } from 'lucide-react'
 import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'

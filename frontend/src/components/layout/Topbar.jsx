@@ -55,7 +55,7 @@ export default function Topbar({ wsConnected = false }) {
       {/* Right controls */}
       <div className="flex items-center gap-4">
         {/* WebSocket live indicator */}
-        <Tooltip content={wsConnected ? 'WebSocket connected' : 'WebSocket disconnected'}>
+        <Tooltip content={wsConnected ? 'Backend online' : 'Backend offline'}>
           <div className="flex items-center gap-1.5">
             {wsConnected ? (
               <>

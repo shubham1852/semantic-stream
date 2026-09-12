@@ -302,6 +302,7 @@ class DetectionService:
         sample_rate: int = settings.DEFAULT_FRAME_SAMPLE_RATE,
         confidence_threshold: float = settings.CONFIDENCE_THRESHOLD,
         progress_callback=None,
+        max_frames: int | None = None,
     ) -> VideoAnalysisResult:
         """Analyse an entire video file and return aggregate results.
 
@@ -318,6 +319,9 @@ class DetectionService:
         progress_callback:
             Optional ``callable(progress_pct: float)`` called after each
             frame to report progress (0–100).
+        max_frames:
+            Cap the number of frames analysed.  If set, ``sample_rate``
+            is automatically increased so the cap is respected.
 
         Returns
         -------
@@ -337,6 +341,19 @@ class DetectionService:
             )
 
         total_frames = meta["total_frames"]
+
+        # Auto-raise sample_rate to respect max_frames cap
+        if max_frames is not None and max_frames > 0:
+            min_rate = max(1, total_frames // max_frames)
+            if min_rate > sample_rate:
+                sample_rate = min_rate
+                log.info(
+                    "video_analysis_sample_rate_adjusted",
+                    job_id=job_id,
+                    new_rate=sample_rate,
+                    reason=f"max_frames cap of {max_frames}",
+                )
+
         expected_analysed = max(1, total_frames // max(1, sample_rate))
 
         t_start = time.perf_counter()
@@ -349,6 +366,7 @@ class DetectionService:
             video=str(video_path),
             total_frames=total_frames,
             sample_rate=sample_rate,
+            max_frames=max_frames,
         )
 
         try:
@@ -366,11 +384,16 @@ class DetectionService:
                 analysed += 1
 
                 if progress_callback is not None:
-                    pct = min(100.0, analysed / expected_analysed * 100.0)
+                    pct = min(99.0, analysed / expected_analysed * 100.0)
                     try:
                         progress_callback(pct)
                     except Exception:
                         pass
+
+                # Stop if we hit the max_frames cap
+                if max_frames is not None and analysed >= max_frames:
+                    log.info("video_analysis_capped", job_id=job_id, frames=analysed)
+                    break
 
         except Exception as exc:
             log.error("video_analysis_error", job_id=job_id, error=str(exc))
@@ -383,6 +406,14 @@ class DetectionService:
             )
         finally:
             self.clear_job_state(job_id)
+
+        # Report 100% complete
+        if progress_callback is not None:
+            try:
+                progress_callback(100.0)
+            except Exception:
+                pass
+
 
         elapsed_s = time.perf_counter() - t_start
 

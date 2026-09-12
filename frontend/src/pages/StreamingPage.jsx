@@ -46,8 +46,8 @@ export default function StreamingPage() {
 
   const [streamReady, setStreamReady] = useState(false)
   const [checking, setChecking] = useState(true)
-  const [bufferLevel, setBufferLevel] = useState(0)
-  const [currentBitrate, setCurrentBitrate] = useState(0)
+  const bufferLevel = 0
+  const currentBitrate = 0
 
   /* Poll stream readiness */
   useEffect(() => {

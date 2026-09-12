@@ -38,7 +38,12 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     ALLOWED_ORIGINS: List[str] = Field(
-        default=["http://localhost:5173", "http://localhost:3000"]
+        default=[
+            "http://localhost:5173",  # Vite dev server
+            "http://localhost:3000",  # Alt dev
+            "http://localhost",       # Docker / Nginx (port 80)
+            "http://localhost:80",    # Explicit port 80
+        ]
     )
 
     # ── Database ────────────────────────────────────────────────────────────

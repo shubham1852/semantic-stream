@@ -17,14 +17,14 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./semanticstream.db}
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./backend/semanticstream.db}
       - DEBUG=${DEBUG:-false}
       - LOG_JSON=${LOG_JSON:-true}
+      - PYTHONPATH=/workspace
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/storage:/app/storage   # Persist uploads & processed files
-      - ./backend:/app                   # Dev hot-reload (remove in prod)
+      - ./backend/storage:/workspace/backend/storage   # Persist uploads & processed files
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

@@ -6,7 +6,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, Zap, Eye, BarChart3, Radio, ChevronDown, Github } from 'lucide-react'
+import { ArrowRight, Zap, Eye, BarChart3, Radio, Github } from 'lucide-react'
 import Button from '../components/ui/Button'
 
 /* ─── Animated priority heatmap demo (CSS only) ─────────────── */

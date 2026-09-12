@@ -100,7 +100,7 @@ function ProfileCard({ id, meta, selected, onSelect }) {
 
 /* ─── Main ─────────────────────────────────────────────────── */
 export default function BandwidthPage() {
-  const [profiles, setProfiles] = useState([])
+  const [_profiles, setProfiles] = useState([])
   const [selected, setSelected] = useState('strong_wifi')
   const [profileData, setProfileData] = useState({})
   const [running, setRunning] = useState(false)

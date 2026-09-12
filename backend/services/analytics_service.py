@@ -301,9 +301,31 @@ class AnalyticsService:
 
                 service = AnalyticsService(db)
 
+                # Track last reported milestone to batch DB writes (every ~10%)
+                last_reported_pct: list[float] = [0.0]
+
+                async def _write_progress(pct: float) -> None:
+                    """Persist progress to DB and commit so polls pick it up."""
+                    await crud.update_job_status(
+                        db, job_id,
+                        status="running",
+                        progress_percent=round(pct, 1),
+                    )
+                    await db.commit()
+                    log.debug("analytics.progress", job_id=job_id, pct=pct)
+
                 def _progress_cb(pct: float) -> None:
-                    # Fire-and-forget progress update via a new sync-compatible call
-                    pass  # Heavy updates are too costly per-frame; use polling
+                    """Called synchronously from the thread pool — schedule async write."""
+                    if pct - last_reported_pct[0] >= 9.0 or pct >= 99.0:
+                        last_reported_pct[0] = pct
+                        # Schedule coroutine on the running event loop from this thread
+                        import asyncio as _aio
+                        loop = _aio.get_event_loop()
+                        _aio.run_coroutine_threadsafe(_write_progress(pct), loop)
+
+                # Cap frames for demo speed: analyse at most 120 frames
+                # (raises sample_rate automatically for long videos)
+                MAX_DEMO_FRAMES = 120
 
                 video_result = await asyncio.to_thread(
                     detection_service.analyse_video,
@@ -312,6 +334,8 @@ class AnalyticsService:
                     video_id,
                     frame_sample_rate,
                     confidence_threshold,
+                    _progress_cb,
+                    MAX_DEMO_FRAMES,
                 )
 
                 if video_result.error:

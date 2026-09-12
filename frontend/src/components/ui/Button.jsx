@@ -1,8 +1,14 @@
 /**
  * components/ui/Button.jsx
  * Primary reusable button with variants, sizes, and loading state.
+ *
+ * icon / iconRight accept EITHER:
+ *   - A component reference: icon={ArrowRight}
+ *   - A pre-rendered JSX element: icon={<ArrowRight size={14} />}
+ * Both patterns are handled safely below.
  */
 
+import { isValidElement } from 'react'
 import Spinner from './Spinner'
 
 const variantClasses = {
@@ -19,17 +25,31 @@ const sizeClasses = {
   lg: 'px-7 py-3 text-base gap-2.5',
 }
 
+/**
+ * Render an icon that may be a component class/fn or a pre-rendered JSX element.
+ * If it's already a valid React element, render it as-is.
+ * If it's a function/class (component ref), instantiate it with the given size.
+ */
+function RenderIcon({ icon, size }) {
+  if (!icon) return null
+  if (isValidElement(icon)) return icon        // already rendered: <ArrowRight size={14} />
+  const Icon = icon                            // component reference: ArrowRight
+  return <Icon size={size} />
+}
+
 export default function Button({
   children,
   variant = 'primary',
   size = 'md',
   loading = false,
   disabled = false,
-  icon: Icon,
+  icon,
   iconRight,
   className = '',
   ...props
 }) {
+  const iconSize = size === 'sm' ? 14 : size === 'lg' ? 20 : 16
+
   return (
     <button
       disabled={disabled || loading}
@@ -45,11 +65,11 @@ export default function Button({
     >
       {loading ? (
         <Spinner size={size === 'sm' ? 12 : 16} />
-      ) : Icon ? (
-        <Icon size={size === 'sm' ? 14 : size === 'lg' ? 20 : 16} />
+      ) : icon ? (
+        <RenderIcon icon={icon} size={iconSize} />
       ) : null}
       {children}
-      {iconRight && !loading && <iconRight size={size === 'sm' ? 14 : 16} />}
+      {iconRight && !loading && <RenderIcon icon={iconRight} size={iconSize} />}
     </button>
   )
 }
