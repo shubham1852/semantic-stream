@@ -12,7 +12,7 @@ import { Camera, CameraOff, Zap, Eye } from 'lucide-react'
 
 const FRAME_INTERVAL_MS = 80 // ~12 fps to server
 
-export default function LiveCameraView({ onConnectionChange }) {
+export default function LiveCameraView({ onConnectionChange, onFrameReceived }) {
   const videoRef = useRef(null)
   const captureCanvasRef = useRef(null)
   const streamRef = useRef(null)
@@ -26,6 +26,14 @@ export default function LiveCameraView({ onConnectionChange }) {
   useEffect(() => {
     onConnectionChange?.(isConnected)
   }, [isConnected, onConnectionChange])
+
+  // Propagate each new server frame to the parent so it can render
+  // the latency chart and detection count without touching WS internals.
+  useEffect(() => {
+    if (lastFrame != null) {
+      onFrameReceived?.(lastFrame)
+    }
+  }, [lastFrame, onFrameReceived])
 
   const startCamera = useCallback(async () => {
     try {

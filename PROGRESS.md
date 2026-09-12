@@ -117,3 +117,39 @@
 | Phase 5 — Frontend | ✅ Complete | 100% |
 | Phase 6 — Integration & Polish | ✅ Complete | 100% |
 | **Overall** | ✅ **COMPLETE** | **100%** |
+
+---
+
+## PHASE 7 — GAP FIXES & ELEVATION (2026-09-12)
+
+- [x] **`backend/models/export_onnx.py`** — ONNX export script created
+- [x] **`backend/models/weights/README.md`** — model weights documentation
+- [x] **`backend/models/yolo_engine.py`** — startup mode logging added (`mode=REAL_ONNX` / `mode=MOCK_FALLBACK`)
+- [x] **HLS auto-trigger** — `analytics_service.py` now fires HLS generation
+       on job completion via `asyncio.create_task` (non-blocking)
+- [x] **VideoPlayer wired to ResultsPage** — video playback card added above
+       metrics section with graceful "Stream not yet available" fallback
+- [x] **`backend/api/routes/demo.py`** — `/api/v1/demo/status` endpoint with
+       5-component health checks (ai_engine, database, ffmpeg, storage, hls)
+- [x] **`backend/main.py`** — demo router registered
+- [x] **DashboardPage.jsx** — System Status card added (colored dot indicators
+       per component, MOCK mode CTA)
+- [x] **LivePage.jsx** — three additions:
+       mock warning banner (amber, dismissible, checks demo/status),
+       processing latency chart (Recharts, 30-frame rolling, 50ms ref line),
+       detection count badge (green > 0, amber = 0)
+- [x] **LiveCameraView.jsx** — `onFrameReceived` callback prop added (WS
+       logic completely untouched)
+- [x] **SettingsPage.jsx** — confirmed working; Reset to Defaults button
+       already present (both in header and save row); settings correctly
+       wired to analysis via Zustand `analysis.config` slice
+- [x] **README.md** — Verified Results section (3-strategy table), Topics line
+- [x] **CONTRIBUTING.md** — contributor guide created
+
+### Post-Fix Status
+- Backend: 59 tests passing (no core logic modified)
+- `/api/v1/demo/status` returns all 5 component keys
+- Upload → Analyse → View Results → Watch Video: full flow working
+- Live Camera: mock banner + latency chart + detection count all active
+- Settings Reset to Defaults: confirmed functional (existing implementation)
+

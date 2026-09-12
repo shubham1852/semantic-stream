@@ -352,6 +352,12 @@ class AnalyticsService:
                 await service.finalise_job(job_id, video_result)
                 await db.commit()
 
+                # Non-blocking HLS generation — fires after the job is marked done.
+                # Failure here is logged but does NOT affect job status.
+                asyncio.create_task(
+                    AnalyticsService._trigger_hls_generation(video_id, video_path)
+                )
+
             except Exception as exc:
                 log.exception("analytics.background_task_error", job_id=job_id, exc_info=exc)
                 try:
@@ -447,7 +453,39 @@ class AnalyticsService:
                 except Exception:
                     pass
 
+    # ── HLS generation helper ─────────────────────────────────────────────────
+
+    @staticmethod
+    async def _trigger_hls_generation(video_id: str, video_path: str) -> None:
+        """Fire HLS encoding for a completed job (non-blocking via create_task).
+
+        Wraps the streaming service call so any FFmpeg errors are captured
+        without propagating back to the analysis background task.
+
+        Parameters
+        ----------
+        video_id:
+            UUID of the video to encode.
+        video_path:
+            Filesystem path to the source video file.
+        """
+        try:
+            from backend.services.streaming_service import StreamingService
+
+            log.info("analytics.hls_trigger_start", video_id=video_id)
+            streaming = StreamingService(db=None)
+            await streaming.generate_hls(video_id, video_path)
+            log.info("analytics.hls_trigger_complete", video_id=video_id)
+        except Exception as exc:
+            # HLS failure is non-fatal — raw video download still works.
+            log.warning(
+                "analytics.hls_trigger_failed",
+                video_id=video_id,
+                error=str(exc),
+            )
+
     # ── Stateless frame summary (used by WebSocket) ───────────────────────────
+
 
     def summarise_frame(
         self,

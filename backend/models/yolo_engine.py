@@ -153,9 +153,11 @@ class YOLOEngine:
 
         if not os.path.exists(self._model_path):
             log.warning(
-                "yolo_model_not_found",
+                "yolo_engine_startup",
                 path=self._model_path,
-                mode="mock",
+                mode="MOCK_FALLBACK",
+                reason="weights_file_not_found",
+                advice="Run: python backend/models/export_onnx.py",
             )
             self._mock_mode = True
             return
@@ -173,15 +175,17 @@ class YOLOEngine:
             )
             self._input_name = self._session.get_inputs()[0].name
             log.info(
-                "yolo_model_loaded",
+                "yolo_engine_startup",
                 path=self._model_path,
+                mode="REAL_ONNX",
                 providers=self._session.get_providers(),
             )
         except ImportError:
             log.warning(
-                "onnxruntime_not_installed",
+                "yolo_engine_startup",
+                mode="MOCK_FALLBACK",
+                reason="onnxruntime_not_installed",
                 advice="pip install onnxruntime",
-                mode="mock",
             )
             self._mock_mode = True
         except Exception as exc:

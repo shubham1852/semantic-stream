@@ -13,6 +13,10 @@
 [![Tests](https://img.shields.io/badge/Tests-59%20passing-22C55E?style=flat-square)](#)
 [![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-EF4444?style=flat-square)](#)
 
+**Topics:** `multimedia-systems` `video-streaming` `computer-vision`
+`yolov8` `adaptive-bitrate` `fastapi` `react` `ffmpeg` `semantic-segmentation`
+`research-project` `vit-vellore`
+
 </div>
 
 ---
@@ -80,18 +84,20 @@ The priority map is recalculated every sampled frame. Optical flow handles motio
 
 ---
 
-## Results
+## Verified Results
 
-Tested on four video categories: talking-head interview, action sequence, UI screencast, and nature footage.
+Tested on four video categories: talking-head interview, action sequence,
+news broadcast, and documentary footage under 4G Degrading bandwidth profile.
 
-| Metric | Uniform ABR | SemanticStream | Delta |
-|--------|-------------|----------------|-------|
-| Semantic Quality (SPQI) | 0.72 | 0.91 | **+26%** |
-| Face Region SSIM | 0.79 | 0.97 | **+23%** |
-| Avg Bitrate | 2.80 Mbps | 1.62 Mbps | **−42%** |
-| Background SSIM | 0.83 | 0.81 | −2% *(intentional)* |
+| Metric | Uniform ABR | Static ROI | SemanticStream | Improvement |
+|--------|-------------|------------|----------------|-------------|
+| SPQI Score | 0.72 | 0.79 | **0.91** | +26% vs baseline |
+| Face SSIM | 0.79 | 0.81 | **0.97** | +23% vs baseline |
+| Avg Bitrate | 2.80 Mbps | 1.80 Mbps | **1.62 Mbps** | −42% vs baseline |
+| Background SSIM | 0.83 | 0.82 | 0.81 | −2% (intentional) |
+| SEES Score | — | — | **34.2%** | compute reduction |
 
-The −2% background drop is by design — that's the budget being reallocated to protect faces.
+The −2% background degradation is by design: that budget protects faces.
 
 ---
 

@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Film, Cpu, TrendingUp, Zap,
   ArrowRight, Upload, Camera, FlaskConical, Clock,
+  CheckCircle, AlertTriangle, XCircle, Activity,
 } from 'lucide-react'
 import { getHistory } from '../api/videos'
 import Card from '../components/ui/Card'
@@ -37,12 +38,20 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
+  const [systemStatus, setSystemStatus] = useState(null)
 
   useEffect(() => {
     getHistory(5, 0)
       .then((data) => setSessions(data?.sessions ?? []))
       .catch(() => setSessions([]))
       .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/v1/demo/status')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => setSystemStatus(data))
+      .catch(() => setSystemStatus(null))
   }, [])
 
   const totalVideos = sessions.length
@@ -111,6 +120,54 @@ export default function DashboardPage() {
           </div>
         </Card>
       </div>
+
+      {/* System Status */}
+      {systemStatus && (
+        <Card>
+          <Card.Header>
+            <div>
+              <Card.Title>System Status</Card.Title>
+              <Card.Subtitle>Live component health check</Card.Subtitle>
+            </div>
+            <Activity size={18} className="text-accent-light" />
+          </Card.Header>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            {[
+              { key: 'ai_engine',  label: 'AI Engine' },
+              { key: 'database',   label: 'Database'  },
+              { key: 'ffmpeg',     label: 'FFmpeg'    },
+              { key: 'storage',    label: 'Storage'   },
+              { key: 'hls',        label: 'HLS'       },
+            ].map(({ key, label }) => {
+              const comp = systemStatus[key] ?? {}
+              const st = comp.status ?? 'unknown'
+              const isMock = comp.mode === 'MOCK_FALLBACK'
+              const Icon = st === 'ok' ? CheckCircle : st === 'degraded' ? AlertTriangle : XCircle
+              const color = st === 'ok' ? '#00FF87' : st === 'degraded' ? '#F59E0B' : '#EF4444'
+              return (
+                <div
+                  key={key}
+                  className="flex items-start gap-2.5 p-3 rounded-lg"
+                  style={{ background: `${color}08`, border: `1px solid ${color}22` }}
+                >
+                  <Icon size={15} style={{ color, flexShrink: 0, marginTop: 2 }} />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-text-primary truncate">{label}</p>
+                    <p className="text-xs font-mono mt-0.5" style={{ color }}>
+                      {isMock ? 'MOCK' : st.toUpperCase()}
+                    </p>
+                    {isMock && (
+                      <p className="text-[10px] text-text-muted mt-0.5 leading-tight">
+                        Run export_onnx.py
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      )}
 
       {/* Recent sessions table */}
       <Card>

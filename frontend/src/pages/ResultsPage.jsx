@@ -4,10 +4,11 @@
  */
 
 import { useParams, useNavigate } from 'react-router-dom'
-import { Download, ArrowLeft, BarChart2, Grid, Info } from 'lucide-react'
+import { Download, ArrowLeft, BarChart2, Grid, Info, Video } from 'lucide-react'
 import { useJobPoller } from '../hooks/useJobPoller'
 import MetricsLineChart from '../components/charts/MetricsLineChart'
 import QpHeatmapGrid from '../components/charts/QpHeatmapGrid'
+import VideoPlayer from '../components/video/VideoPlayer'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import ProgressBar from '../components/ui/ProgressBar'
@@ -112,6 +113,40 @@ export default function ResultsPage() {
 
       {isDone && (
         <>
+          {/* ── Video Playback ─────────────────────────────────────── */}
+          {(() => {
+            const videoId = metrics?.video_id ?? summary?.video_id ?? null
+            const hlsSrc = videoId
+              ? `/api/v1/stream/${videoId}`
+              : null
+            return (
+              <Card>
+                <Card.Header>
+                  <div>
+                    <Card.Title>Processed Video</Card.Title>
+                    <Card.Subtitle>
+                      HLS adaptive stream — seeks to any point instantly
+                    </Card.Subtitle>
+                  </div>
+                  <Video size={18} className="text-accent-light" />
+                </Card.Header>
+                {hlsSrc ? (
+                  <VideoPlayer src={hlsSrc} />
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
+                    <Video size={28} className="text-text-muted" />
+                    <p className="text-sm text-text-muted">
+                      Stream not yet available — HLS encoding may still be running.
+                    </p>
+                    <p className="text-xs text-text-muted font-mono">
+                      Refresh this page in a few seconds.
+                    </p>
+                  </div>
+                )}
+              </Card>
+            )
+          })()}
+
           {/* Summary metrics */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[

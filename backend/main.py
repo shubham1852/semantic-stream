@@ -54,6 +54,7 @@ from backend.api.routes.experiment import router as experiment_router
 from backend.api.routes.history import router as history_router
 from backend.api.routes.bandwidth import router as bandwidth_router
 from backend.api.routes.report import router as report_router
+from backend.api.routes.demo import router as demo_router
 from backend.api.websocket import router as ws_router
 
 configure_logging()
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(history_router,    prefix=prefix, tags=["History"])
     app.include_router(bandwidth_router,  prefix=prefix, tags=["Bandwidth"])
     app.include_router(report_router,     prefix=prefix, tags=["Report"])
+    app.include_router(demo_router,       prefix=prefix, tags=["Demo"])
     app.include_router(ws_router,         tags=["WebSocket"])
 
     # ── Exception handlers ────────────────────────────────────────────────────
