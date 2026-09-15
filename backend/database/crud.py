@@ -206,9 +206,11 @@ async def update_job_status(
     error_message: str | None = None,
     avg_spqi: float | None = None,
     avg_ssim: float | None = None,
+    avg_psnr: float | None = None,
     avg_bitrate_kbps: float | None = None,
     sees_score: float | None = None,
     bitrate_reduction_pct: float | None = None,
+    encode_time_ms: float | None = None,
 ) -> None:
     """Patch mutable fields on an analysis job.
 
@@ -237,12 +239,16 @@ async def update_job_status(
         values["avg_spqi"] = avg_spqi
     if avg_ssim is not None:
         values["avg_ssim"] = avg_ssim
+    if avg_psnr is not None:
+        values["avg_psnr"] = avg_psnr
     if avg_bitrate_kbps is not None:
         values["avg_bitrate_kbps"] = avg_bitrate_kbps
     if sees_score is not None:
         values["sees_score"] = sees_score
     if bitrate_reduction_pct is not None:
         values["bitrate_reduction_pct"] = bitrate_reduction_pct
+    if encode_time_ms is not None:
+        values["encode_time_ms"] = encode_time_ms
 
     await db.execute(update(AnalysisJob).where(AnalysisJob.id == job_id).values(**values))
 

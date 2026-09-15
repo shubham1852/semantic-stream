@@ -15,6 +15,10 @@ import { StatusBadge, TierBadge } from '../components/ui/Badge'
 import { getStreamUrl, getStreamStatus } from '../api/stream'
 import Spinner from '../components/ui/Spinner'
 
+function getRawUrl(videoId) {
+  return `/api/v1/stream/${videoId}/raw`
+}
+
 const QP_TIERS = [
   { tier: 'P1', label: 'Face',       qp: 18, color: '#00FF87' },
   { tier: 'P2', label: 'Text',       qp: 22, color: '#4ADE80' },
@@ -45,6 +49,7 @@ export default function StreamingPage() {
   const videoId = searchParams.get('videoId')
 
   const [streamReady, setStreamReady] = useState(false)
+  const [streamType, setStreamType] = useState(null)  // 'hls' | 'raw' | 'none'
   const [checking, setChecking] = useState(true)
   const bufferLevel = 0
   const currentBitrate = 0
@@ -58,6 +63,7 @@ export default function StreamingPage() {
         const data = await getStreamStatus(videoId)
         if (!cancelled) {
           setStreamReady(data?.ready ?? false)
+          setStreamType(data?.stream_type ?? null)
           setChecking(false)
         }
       } catch {
@@ -68,7 +74,10 @@ export default function StreamingPage() {
     return () => { cancelled = true }
   }, [videoId])
 
-  const streamUrl = videoId ? getStreamUrl(videoId) : null
+  // Use raw MP4 fallback when HLS isn't generated yet
+  const streamUrl = videoId
+    ? (streamType === 'raw' ? getRawUrl(videoId) : getStreamUrl(videoId))
+    : null
 
   return (
     <PageShell>

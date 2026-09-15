@@ -17,6 +17,24 @@ export function getStreamUrl(videoId) {
 }
 
 /**
+ * Build the processed MP4 stream URL for direct playback.
+ * @param {string} videoId
+ * @returns {string}   e.g. "/api/v1/stream/abc123/processed"
+ */
+export function getProcessedVideoUrl(videoId) {
+  return `/api/v1/stream/${videoId}/processed`
+}
+
+/**
+ * Build the raw MP4 stream URL.
+ * @param {string} videoId
+ * @returns {string}   e.g. "/api/v1/stream/abc123/raw"
+ */
+export function getRawVideoUrl(videoId) {
+  return `/api/v1/stream/${videoId}/raw`
+}
+
+/**
  * Fetch a single frame with an optional visual overlay from the backend.
  * GET /api/v1/frame/{video_id}/{frame_number}?overlay=heatmap|original|compressed|sidebyside
  * @param {string} videoId

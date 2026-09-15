@@ -14,7 +14,7 @@ Usage:
 from pathlib import Path
 from typing import List
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -153,6 +153,20 @@ class Settings(BaseSettings):
     # ── Logging ───────────────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
     LOG_JSON: bool = True
+
+    @model_validator(mode="after")
+    def resolve_paths(self) -> "Settings":
+        # Resolve YOLO_MODEL_PATH if relative or not found
+        model_path = Path(self.YOLO_MODEL_PATH)
+        if not model_path.is_absolute() or not model_path.exists():
+            candidate = self.BASE_DIR / model_path
+            if candidate.exists():
+                self.YOLO_MODEL_PATH = candidate
+            else:
+                default_cand = self.BASE_DIR / "models" / "weights" / "yolov8n.onnx"
+                if default_cand.exists():
+                    self.YOLO_MODEL_PATH = default_cand
+        return self
 
 
 # Singleton instance — import this everywhere

@@ -19,6 +19,7 @@ export function useJobPoller(jobId) {
     status: 'idle',
     progressPct: 0,
     metrics: null,
+    videoId: null,
     error: null,
   })
   const timerRef = useRef(null)
@@ -32,8 +33,10 @@ export function useJobPoller(jobId) {
         const status = data.status ?? 'running'
         const progressPct = data.progress_percent ?? 0
         const metrics = data.metrics ?? null
+        // video_id is at the top level of the response envelope
+        const videoId = data.video_id ?? metrics?.summary?.video_id ?? null
 
-        setState({ status, progressPct, metrics, error: null })
+        setState({ status, progressPct, metrics, videoId, error: null })
 
         if (!TERMINAL_STATUSES.has(status.toLowerCase())) {
           timerRef.current = setTimeout(poll, POLL_INTERVAL_MS)

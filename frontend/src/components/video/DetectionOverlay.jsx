@@ -64,7 +64,6 @@ export default function DetectionOverlay({ detections = [], width = 640, height 
       width={width}
       height={height}
       className={`absolute inset-0 pointer-events-none ${className}`}
-      style={{ mixBlendMode: 'screen' }}
     />
   )
 }

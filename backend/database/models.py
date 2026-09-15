@@ -86,9 +86,11 @@ class AnalysisJob(Base):
     # Aggregate metrics (cached after completion)
     avg_spqi: float = Column(Float, nullable=True)
     avg_ssim: float = Column(Float, nullable=True)
+    avg_psnr: float = Column(Float, nullable=True)
     avg_bitrate_kbps: float = Column(Float, nullable=True)
     sees_score: float = Column(Float, nullable=True)
     bitrate_reduction_pct: float = Column(Float, nullable=True)
+    encode_time_ms: float = Column(Float, nullable=True)
 
     # Relationships
     video = relationship("Video", back_populates="jobs")

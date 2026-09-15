@@ -22,6 +22,12 @@ import structlog
 from backend.core.config import settings
 
 
+def _safe_add_logger_name(logger: Any, method_name: str, event_dict: dict) -> dict:
+    if logger is not None and hasattr(logger, "name"):
+        event_dict["logger"] = logger.name
+    return event_dict
+
+
 def configure_logging() -> None:
     """Configure structlog and stdlib logging once at application startup.
 
@@ -31,7 +37,7 @@ def configure_logging() -> None:
     shared_processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
+        _safe_add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
     ]

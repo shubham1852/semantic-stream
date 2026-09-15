@@ -67,7 +67,7 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager.
 
-    Runs on startup: initialise database tables.
+    Runs on startup: initialise database tables and load AI model.
     Runs on shutdown: log graceful shutdown.
     """
     logger.info(
@@ -76,6 +76,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         env_debug=settings.DEBUG,
     )
     await init_db()
+    try:
+        from backend.models.yolo_engine import yolo_engine
+        yolo_engine.load()
+    except Exception as e:
+        logger.warning("yolo_engine.load_skipped", error=str(e))
     yield
     logger.info("semanticstream.shutdown")
 

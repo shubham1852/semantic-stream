@@ -18,7 +18,7 @@ class ExperimentRequest(BaseModel):
         description="List of strategy names to compare.",
     )
     bandwidth_profile: str = Field(
-        default="strong_wifi",
+        default="broadband",
         description="Named bandwidth profile for the experiment.",
     )
 

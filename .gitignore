@@ -47,6 +47,8 @@ lib64/
 *.sqlite3
 
 # ── Storage / Media ────────────────────────────────────────────────────────────
+storage/
+test_videos/
 backend/storage/uploads/*
 backend/storage/processed/*
 backend/storage/frames/*

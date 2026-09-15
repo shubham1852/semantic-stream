@@ -29,6 +29,7 @@ import base64
 from pathlib import Path
 from typing import Any
 
+from backend.core.config import settings
 from backend.core.exceptions import VideoNotFoundError, VideoProcessingError
 from backend.core.logging_config import get_logger
 from backend.database import crud
@@ -49,31 +50,14 @@ class StreamingService:
     def __init__(self, db) -> None:
         self._db = db
 
-    # ── HLS Playlist ──────────────────────────────────────────────────────────
+    # ── HLS Playlist & Processed Video ────────────────────────────────────────
 
     async def get_playlist_path(self, video_id: str) -> str:
-        """Return the filesystem path to the HLS master playlist.
+        """Return the filesystem path to the HLS master playlist or processed video fallback.
 
         Checks for a pre-generated ``master.m3u8`` in the HLS directory.
-        If not found, falls back to the raw upload path so the player can
-        still serve *something* (direct MP4 via ``FileResponse``).
-
-        Parameters
-        ----------
-        video_id:
-            UUID of the video.
-
-        Returns
-        -------
-        str
-            Absolute path to the playlist or raw video file.
-
-        Raises
-        ------
-        VideoNotFoundError
-            If the video record does not exist in the database.
-        VideoProcessingError
-            If neither the HLS playlist nor the upload file can be found on disk.
+        If not found, falls back to the processed annotated MP4 or raw upload path
+        so the player can stream natively.
         """
         video = await crud.get_video(self._db, video_id)
         if video is None:
@@ -82,21 +66,57 @@ class StreamingService:
                 detail="No database record for this video_id.",
             )
 
-        # Prefer HLS playlist
+        # 1. Prefer HLS playlist if generated
         playlist = hls_dir(video_id) / "master.m3u8"
         if playlist.exists():
             log.info("streaming.hls_playlist_found", video_id=video_id, path=str(playlist))
             return str(playlist)
 
-        # Fall back to raw upload
-        raw_path = Path(video.filepath)
-        if raw_path.exists():
-            log.info("streaming.raw_fallback", video_id=video_id, path=str(raw_path))
-            return str(raw_path)
+        # 2. Fall back to processed annotated MP4, then raw upload
+        return await self.get_processed_video_path(video_id)
+
+    async def get_processed_video_path(self, video_id: str) -> str:
+        """Return the filesystem path to the processed / annotated video MP4.
+
+        Checks for the annotated video rendered with bounding boxes and priority HUD.
+        Falls back to encoded/semantic stream outputs, and finally the raw source video.
+        """
+        video = await crud.get_video(self._db, video_id)
+        if video is None:
+            raise VideoNotFoundError(
+                f"Video '{video_id}' not found.",
+                detail="No database record for this video_id.",
+            )
+
+        # 1. Annotated MP4 (produced by render_service) & encoded outputs
+        candidates = [
+            settings.PROCESSED_DIR / f"{video_id}_annotated.mp4",
+            settings.BASE_DIR.parent / "storage" / "processed" / f"{video_id}_annotated.mp4",
+            settings.PROCESSED_DIR / f"{video_id}_semanticstream.mp4",
+            settings.PROCESSED_DIR / f"{video_id}_encoded.mp4",
+            settings.PROCESSED_DIR / f"{video_id}_uniform_abr.mp4",
+            settings.PROCESSED_DIR / f"{video_id}_static_roi.mp4",
+        ]
+        for c in candidates:
+            if c.exists():
+                log.info("streaming.processed_found", video_id=video_id, path=str(c))
+                return str(c)
+
+        # 2. Raw upload fallback
+        raw_candidates = [
+            Path(video.filepath),
+            settings.UPLOAD_DIR / Path(video.filepath).name,
+            settings.BASE_DIR.parent / "storage" / "uploads" / Path(video.filepath).name,
+            Path("storage/uploads") / Path(video.filepath).name,
+        ]
+        for rc in raw_candidates:
+            if rc.exists():
+                log.info("streaming.processed_fallback_raw", video_id=video_id, path=str(rc))
+                return str(rc)
 
         raise VideoProcessingError(
             f"No playable file found for video '{video_id}'.",
-            detail=f"HLS playlist: {playlist} — Raw: {raw_path}",
+            detail=f"Checked annotated MP4 and upload path: {video.filepath}",
         )
 
     # ── Annotated Frame ───────────────────────────────────────────────────────
@@ -245,6 +265,81 @@ class StreamingService:
             "dominant_tier": dominant_tier,
             "overlay": overlay,
         }
+
+    # ── HLS generation ────────────────────────────────────────────────────────
+
+    async def generate_hls(self, video_id: str, video_path: str) -> None:
+        """Transcode a video to HLS segments using FFmpeg.
+
+        Creates the HLS output in ``{STORAGE_DIR}/hls/{video_id}/`` with a
+        ``master.m3u8`` playlist and 4-second segments.  Uses CRF 22 (high
+        quality, preserving faces and detail) for the default ABR encoding.
+
+        Parameters
+        ----------
+        video_id:
+            UUID of the video — used to name the output directory.
+        video_path:
+            Filesystem path to the source video file.
+        """
+        import subprocess
+        from backend.core.config import settings
+        from backend.utils.file_utils import hls_dir
+
+        out_dir = hls_dir(video_id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        playlist = out_dir / "master.m3u8"
+
+        if playlist.exists():
+            log.info("streaming.hls_already_exists", video_id=video_id)
+            return
+
+        segment_pattern = str(out_dir / "seg%03d.ts")
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            # Video: libx264 with CRF 22 — high quality, preserves faces/detail
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "22",          # High quality (lower = better; 22 = visually lossless)
+            "-profile:v", "main",
+            "-level", "3.1",
+            # Keep original resolution — do NOT downscale important content
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",  # ensure even dimensions only
+            # Audio: AAC passthrough / re-encode
+            "-c:a", "aac",
+            "-b:a", "128k",
+            # HLS muxer settings
+            "-f", "hls",
+            "-hls_time", "4",
+            "-hls_playlist_type", "vod",
+            "-hls_segment_filename", segment_pattern,
+            str(playlist),
+        ]
+
+        log.info("streaming.hls_encode_start", video_id=video_id, cmd=" ".join(cmd))
+
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=900,  # 15 min hard limit
+            )
+            if proc.returncode == 0:
+                log.info("streaming.hls_encode_done", video_id=video_id,
+                         playlist=str(playlist))
+            else:
+                error = (proc.stderr or "")[-600:]
+                log.error("streaming.hls_encode_failed", video_id=video_id,
+                          stderr=error)
+        except subprocess.TimeoutExpired:
+            log.error("streaming.hls_encode_timeout", video_id=video_id)
+        except FileNotFoundError:
+            log.warning("streaming.ffmpeg_not_found",
+                        advice="Install FFmpeg and add it to PATH")
 
     @staticmethod
     def _read_frame_from_video(video_path: Path, frame_number: int):

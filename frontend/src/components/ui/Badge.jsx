@@ -1,8 +1,7 @@
 /**
  * components/ui/Badge.jsx
- * Priority tier badges (P1–P5) and status badges.
+ * Priority tier badges (P1–P5), status badges, and generic colored badges.
  */
-
 
 const TIER_LABELS = {
   P1: 'Face',
@@ -13,7 +12,7 @@ const TIER_LABELS = {
 }
 
 export function TierBadge({ tier, showLabel = false, className = '' }) {
-  const t = String(tier).toUpperCase().replace('TIER_', '')
+  const t = String(tier || 'P3').toUpperCase().replace('TIER_', '')
   return (
     <span className={`tier-badge tier-${t.toLowerCase()} ${className}`}>
       {t}
@@ -47,4 +46,32 @@ export function StatusBadge({ status = 'idle', className = '' }) {
   )
 }
 
-export default TierBadge
+const badgeVariants = {
+  green:   'text-data-green bg-data-green/10 border-data-green/30',
+  purple:  'text-accent-light bg-accent/20 border-accent-light/30',
+  indigo:  'text-accent-light bg-accent/20 border-accent-light/30',
+  blue:    'text-data-blue bg-data-blue/10 border-data-blue/30',
+  amber:   'text-data-amber bg-data-amber/10 border-data-amber/30',
+  red:     'text-data-red bg-data-red/10 border-data-red/30',
+  default: 'text-text-muted bg-white/5 border-border-subtle',
+}
+
+export function Badge({ children, variant = 'default', tier, showLabel, className = '', ...props }) {
+  if (tier) {
+    return <TierBadge tier={tier} showLabel={showLabel} className={className} />
+  }
+
+  const variantClass = badgeVariants[variant] || badgeVariants.default
+
+  return (
+    <span
+      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${variantClass} ${className}`}
+      {...props}
+    >
+      {children}
+    </span>
+  )
+}
+
+export default Badge
+

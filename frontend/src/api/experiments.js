@@ -15,7 +15,7 @@ export async function startExperiment(payload) {
   return client.post('/experiment', {
     video_id: payload.videoId,
     strategies: payload.strategies ?? ['uniform_abr', 'static_roi', 'semanticstream'],
-    bandwidth_profile: payload.bandwidthProfile ?? 'strong_wifi',
+    bandwidth_profile: payload.bandwidthProfile ?? 'broadband',
   })
 }
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -129,7 +130,18 @@ class YOLOEngine:
         confidence_threshold: float = settings.CONFIDENCE_THRESHOLD,
         nms_threshold: float = settings.NMS_THRESHOLD,
     ) -> None:
-        self._model_path = str(model_path or settings.YOLO_MODEL_PATH)
+        raw_path = str(model_path or settings.YOLO_MODEL_PATH)
+        path_obj = Path(raw_path)
+        if not path_obj.is_absolute() or not path_obj.exists():
+            cand = settings.BASE_DIR / path_obj
+            if cand.exists():
+                raw_path = str(cand)
+            else:
+                default_cand = settings.BASE_DIR / "models" / "weights" / "yolov8n.onnx"
+                if default_cand.exists():
+                    raw_path = str(default_cand)
+
+        self._model_path = raw_path
         self._conf_threshold = confidence_threshold
         self._nms_threshold = nms_threshold
         self._session = None          # onnxruntime.InferenceSession
@@ -150,6 +162,12 @@ class YOLOEngine:
             incompatible.  A missing file silently activates mock mode.
         """
         import os
+
+        # Final check if model path exists
+        if not os.path.exists(self._model_path):
+            cand = settings.BASE_DIR / "models" / "weights" / "yolov8n.onnx"
+            if cand.exists():
+                self._model_path = str(cand)
 
         if not os.path.exists(self._model_path):
             log.warning(
@@ -174,6 +192,7 @@ class YOLOEngine:
                 self._model_path, providers=providers
             )
             self._input_name = self._session.get_inputs()[0].name
+            self._mock_mode = False
             log.info(
                 "yolo_engine_startup",
                 path=self._model_path,
@@ -189,9 +208,12 @@ class YOLOEngine:
             )
             self._mock_mode = True
         except Exception as exc:
-            raise ModelLoadError(
-                f"Failed to load ONNX model at {self._model_path}: {exc}"
-            ) from exc
+            log.warning(
+                "yolo_engine_load_error",
+                error=str(exc),
+                mode="MOCK_FALLBACK",
+            )
+            self._mock_mode = True
 
     def unload(self) -> None:
         """Release the ONNX session (call on application shutdown)."""
@@ -214,16 +236,26 @@ class YOLOEngine:
         List[Detection]
             Filtered detections (confidence ≥ threshold, after NMS).
         """
-        if self._mock_mode:
+        if self._session is None and not self._mock_mode:
+            try:
+                self.load()
+            except Exception:
+                self._mock_mode = True
+
+        if self._mock_mode or self._session is None:
             return self._mock_detections(frame_bgr)
 
         t0 = time.perf_counter()
-        blob, scale_x, scale_y = self._preprocess(frame_bgr)
-        raw = self._session.run(None, {self._input_name: blob})[0]
-        detections = self._postprocess(raw, scale_x, scale_y)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        log.debug("yolo_infer", detections=len(detections), elapsed_ms=round(elapsed_ms, 1))
-        return detections
+        try:
+            blob, scale_x, scale_y = self._preprocess(frame_bgr)
+            raw = self._session.run(None, {self._input_name: blob})[0]
+            detections = self._postprocess(raw, scale_x, scale_y)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            log.debug("yolo_infer", detections=len(detections), elapsed_ms=round(elapsed_ms, 1))
+            return detections
+        except Exception as exc:
+            log.warning("yolo_inference_error", error=str(exc))
+            return self._mock_detections(frame_bgr)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

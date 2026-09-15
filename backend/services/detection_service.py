@@ -59,6 +59,7 @@ from backend.utils.frame_utils import (
 )
 from backend.utils.metric_utils import (
     compute_psnr,
+    compute_regional_ssim,
     compute_spqi,
     compute_ssim,
 )
@@ -100,6 +101,8 @@ class FrameAnalysisResult:
     spqi_score: Optional[float] = None
     ssim_score: Optional[float] = None
     psnr_score: Optional[float] = None
+    p1_ssim: Optional[float] = None
+    p5_ssim: Optional[float] = None
 
     # Histogram (for scene-cut detection)
     histogram: Optional[np.ndarray] = None
@@ -125,6 +128,8 @@ class VideoAnalysisResult:
     avg_spqi: Optional[float] = None
     avg_ssim: Optional[float] = None
     avg_psnr: Optional[float] = None
+    avg_face_ssim: Optional[float] = None
+    avg_bg_ssim: Optional[float] = None
     avg_motion_frac: float = 0.0
     avg_text_frac: float = 0.0
 
@@ -265,14 +270,36 @@ class DetectionService:
             except Exception as exc:
                 log.warning("qp_matrix_failed", error=str(exc))
 
-        # ── 6. Quality metrics ─────────────────────────────────────────────
+        # ── 6. Quality metrics ─────────────────────────────────────────
+        # reference_frame here is the JPEG-compressed "distorted" signal that
+        # simulates uniform-ABR output.  frame_bgr is the original (reference).
+        # We compare: original (ref) vs JPEG-compressed (distorted).
         if reference_frame is not None and result.priority_map is not None:
             try:
-                result.ssim_score = compute_ssim(reference_frame, frame_bgr)
-                result.psnr_score = compute_psnr(reference_frame, frame_bgr)
+                result.ssim_score = compute_ssim(frame_bgr, reference_frame)
+                result.psnr_score = compute_psnr(frame_bgr, reference_frame)
                 result.spqi_score = compute_spqi(
-                    reference_frame, frame_bgr, result.priority_map
+                    frame_bgr, reference_frame, result.priority_map
                 )
+
+                # Regional SSIM: P1 (faces/persons)
+                person_dets = [d for d in detections if d.is_person]
+                if person_dets:
+                    p1_mask = np.zeros((h, w), dtype=bool)
+                    for d in person_dets:
+                        px1, py1, px2, py2 = d.x1, d.y1, d.x2, d.y2
+                        p1_mask[max(0, py1):min(h, py2), max(0, px1):min(w, px2)] = True
+                    if np.any(p1_mask):
+                        s1 = compute_regional_ssim(frame_bgr, reference_frame, p1_mask)
+                        if not np.isnan(s1):
+                            result.p1_ssim = float(s1)
+
+                # Regional SSIM: P5 (background regions with lowest priority)
+                p5_mask = (result.priority_map <= settings.PRIORITY_P5 + 0.05)
+                if np.any(p5_mask):
+                    s5 = compute_regional_ssim(frame_bgr, reference_frame, p5_mask)
+                    if not np.isnan(s5):
+                        result.p5_ssim = float(s5)
             except Exception as exc:
                 log.debug("quality_metrics_failed", error=str(exc))
 
@@ -370,14 +397,30 @@ class DetectionService:
         )
 
         try:
+            import cv2  # already a hard dep via frame_utils
             for frame_num, ts_ms, frame in extract_frames(
                 video_path, sample_rate=sample_rate
             ):
+                # Simulate uniform-ABR compression at Q=85 so we have a
+                # reference vs distorted pair for PSNR / SSIM / SPQI.
+                # The original frame is the "reference" (high quality);
+                # the JPEG-compressed version represents what a uniform-ABR
+                # baseline encoder produces (the "distorted" signal).
+                try:
+                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+                    _, jpeg_buf = cv2.imencode(".jpg", frame, encode_params)
+                    compressed_ref = cv2.imdecode(
+                        np.frombuffer(jpeg_buf, dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
+                except Exception:
+                    compressed_ref = None  # graceful degradation
+
                 fr = self.analyse_frame(
                     frame_bgr=frame,
                     frame_number=frame_num,
                     timestamp_ms=ts_ms,
                     job_id=job_id,
+                    reference_frame=compressed_ref,
                     confidence_threshold=confidence_threshold,
                 )
                 frame_results.append(fr)
@@ -421,6 +464,8 @@ class DetectionService:
         spqi_vals = [r.spqi_score for r in frame_results if r.spqi_score is not None]
         ssim_vals = [r.ssim_score for r in frame_results if r.ssim_score is not None]
         psnr_vals = [r.psnr_score for r in frame_results if r.psnr_score is not None]
+        face_vals = [r.p1_ssim for r in frame_results if r.p1_ssim is not None]
+        bg_vals = [r.p5_ssim for r in frame_results if r.p5_ssim is not None]
 
         result = VideoAnalysisResult(
             job_id=job_id,
@@ -430,6 +475,8 @@ class DetectionService:
             avg_spqi=float(np.mean(spqi_vals)) if spqi_vals else None,
             avg_ssim=float(np.mean(ssim_vals)) if ssim_vals else None,
             avg_psnr=float(np.mean(psnr_vals)) if psnr_vals else None,
+            avg_face_ssim=float(np.mean(face_vals)) if face_vals else None,
+            avg_bg_ssim=float(np.mean(bg_vals)) if bg_vals else None,
             avg_motion_frac=float(
                 np.mean([r.motion_area_frac for r in frame_results])
             ) if frame_results else 0.0,

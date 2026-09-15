@@ -72,7 +72,7 @@ const useAppStore = create((set, get) => ({
     config: {
       videoId: '',
       strategies: ['uniform_abr', 'static_roi', 'semanticstream'],
-      bandwidthProfile: 'strong_wifi',
+      bandwidthProfile: 'broadband',
     },
   },
   setExperimentConfig: (config) =>

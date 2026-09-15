@@ -9,19 +9,19 @@ export default defineConfig({
     proxy: {
       // Proxy API calls to FastAPI backend during development
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
       },
       // Proxy health check to FastAPI backend
       '/health': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
       },
       // Proxy WebSocket connections to FastAPI backend
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://127.0.0.1:8000',
         ws: true,
         changeOrigin: true,
       },

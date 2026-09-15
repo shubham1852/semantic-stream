@@ -27,5 +27,5 @@ async def get_bandwidth_profiles(
         Standard envelope with a ``profiles`` dict mapping name to data.
     """
     service = BandwidthService()
-    profiles = service.get_all_profiles()
+    profiles = service.list_profiles()
     return {"status": "success", "data": {"profiles": profiles}, "message": ""}
