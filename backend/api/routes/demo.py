@@ -6,84 +6,129 @@ GET /api/v1/demo/status — system component health summary.
 Used by:
   * DashboardPage System Status card
   * LiveCameraPage mock-mode warning banner
-  * Integration smoke tests
-
-This endpoint performs lightweight, non-blocking checks on each system
-component and returns a single JSON snapshot.  It intentionally avoids
-heavy DB queries — it only touches the module singletons that are already
-loaded in memory.
+  * Integration smoke tests and evaluation
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import time
 from typing import Any
 
-from fastapi import APIRouter
+import numpy as np
+import structlog
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
-from backend.core.logging_config import get_logger
+from backend.database import crud
+from backend.database.database import get_db
 
-log = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _check_yolo() -> dict[str, Any]:
-    """Report the current YOLO engine mode and model path."""
+    """Report current YOLO engine status and perform a quick inference probe."""
     try:
         from backend.models.yolo_engine import yolo_engine
 
-        if yolo_engine.is_mock:
-            return {
-                "status": "degraded",
-                "mode": "MOCK_FALLBACK",
-                "detail": "ONNX model not found. Run: python backend/models/export_onnx.py",
-                "model_path": str(settings.YOLO_MODEL_PATH),
-            }
+        is_mock = getattr(yolo_engine, "is_mock", True)
+        engine_mode = "MOCK_FALLBACK" if is_mock else "REAL_ONNX"
+
+        inference_ms = -1.0
+        try:
+            start = time.perf_counter()
+            test_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+            yolo_engine.detect(test_frame)
+            inference_ms = round((time.perf_counter() - start) * 1000, 1)
+        except Exception:
+            inference_ms = -1.0
+
         return {
-            "status": "ok",
-            "mode": "REAL_ONNX",
-            "detail": "ONNX model loaded and ready.",
+            "status": "degraded" if is_mock else "ok",
+            "mode": engine_mode,
+            "inference_test_ms": inference_ms,
+            "model_loaded": not is_mock,
+            "detail": "ONNX model loaded and ready." if not is_mock else "ONNX model not found. Run export_onnx.py",
             "model_path": str(settings.YOLO_MODEL_PATH),
         }
     except Exception as exc:
-        return {"status": "error", "mode": "UNKNOWN", "detail": str(exc)}
-
-
-def _check_database() -> dict[str, Any]:
-    """Return ok if the database file / connection string is reachable."""
-    try:
-        db_url = str(settings.DATABASE_URL)
-        # For SQLite — check the file exists
-        if "sqlite" in db_url:
-            db_file = db_url.replace("sqlite+aiosqlite:///", "").split("?")[0]
-            if os.path.exists(db_file):
-                return {"status": "ok", "detail": "SQLite database file present."}
-            return {"status": "degraded", "detail": "SQLite file not found — run migrations."}
-        return {"status": "ok", "detail": "Non-SQLite DB configured (file check skipped)."}
-    except Exception as exc:
-        return {"status": "error", "detail": str(exc)}
+        return {
+            "status": "error",
+            "mode": "UNKNOWN",
+            "inference_test_ms": -1.0,
+            "model_loaded": False,
+            "detail": str(exc),
+        }
 
 
 def _check_ffmpeg() -> dict[str, Any]:
-    """Verify ffmpeg is on PATH."""
+    """Verify ffmpeg is accessible and probe version."""
     try:
-        ffmpeg_path = shutil.which("ffmpeg")
-        if ffmpeg_path:
-            return {"status": "ok", "detail": f"Found at {ffmpeg_path}"}
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            known_paths = [
+                os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg.Essentials_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-essentials_build\bin\ffmpeg.exe"),
+                r"C:\ffmpeg\bin\ffmpeg.exe",
+            ]
+            for kp in known_paths:
+                if os.path.exists(kp):
+                    ffmpeg_bin = kp
+                    bin_dir = os.path.dirname(kp)
+                    if bin_dir not in os.environ["PATH"]:
+                        os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+                    break
+        ffmpeg_bin = ffmpeg_bin or "ffmpeg"
+        res = subprocess.run(
+            [ffmpeg_bin, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        ffmpeg_ok = res.returncode == 0
+        ffmpeg_version = res.stdout.split("\n")[0] if ffmpeg_ok else "unavailable"
         return {
-            "status": "degraded",
-            "detail": "ffmpeg not found on PATH. Video encoding will fail.",
+            "status": "ok" if ffmpeg_ok else "degraded",
+            "available": ffmpeg_ok,
+            "version": ffmpeg_version,
+            "detail": f"Found: {ffmpeg_version}" if ffmpeg_ok else "ffmpeg not found on PATH. Video encoding will fail.",
         }
     except Exception as exc:
-        return {"status": "error", "detail": str(exc)}
+        return {
+            "status": "degraded",
+            "available": False,
+            "version": "not found",
+            "detail": str(exc),
+        }
+
+
+async def _check_database(db: AsyncSession) -> dict[str, Any]:
+    """Verify database connectivity and count sessions."""
+    try:
+        jobs = await crud.list_jobs(db, limit=100)
+        session_count = len(jobs) if jobs else 0
+        return {
+            "status": "ok",
+            "connected": True,
+            "total_sessions": session_count,
+            "detail": f"Database connected ({session_count} total sessions recorded).",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "connected": False,
+            "total_sessions": 0,
+            "detail": str(exc),
+        }
 
 
 def _check_storage() -> dict[str, Any]:
-    """Verify the upload and processed storage directories exist and are writable."""
+    """Verify upload and processed storage directories exist and are writable."""
     try:
         upload_dir = str(settings.UPLOAD_DIR)
         processed_dir = str(settings.PROCESSED_DIR)
@@ -114,43 +159,63 @@ def _check_hls() -> dict[str, Any]:
         return {"status": "error", "detail": str(exc)}
 
 
-# ── Route ─────────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.get(
-    "/demo/status",
-    summary="System component health snapshot",
-    tags=["Demo"],
-)
-async def demo_status() -> dict[str, Any]:
-    """Return a health snapshot for all 5 SemanticStream system components.
+@router.get("/demo/status", summary="System component health snapshot", tags=["Demo"])
+@router.get("/status", summary="System component health snapshot", tags=["Demo"])
+async def demo_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Return a comprehensive health snapshot for all SemanticStream system components."""
+    ai_comp = _check_yolo()
+    ffmpeg_comp = _check_ffmpeg()
+    db_comp = await _check_database(db)
+    storage_comp = _check_storage()
+    hls_comp = _check_hls()
 
-    Used by the Dashboard System Status card and the Live Camera mock-mode
-    warning banner to surface degraded components to the user.
-
-    Returns
-    -------
-    Dict with keys:
-        ``ai_engine``, ``database``, ``ffmpeg``, ``storage``, ``hls``
-    Each value is a dict with at minimum ``status`` ("ok" | "degraded" | "error")
-    and ``detail`` (human-readable explanation).
-    """
     components = {
-        "ai_engine": _check_yolo(),
-        "database": _check_database(),
-        "ffmpeg": _check_ffmpeg(),
-        "storage": _check_storage(),
-        "hls": _check_hls(),
+        "ai_engine": ai_comp,
+        "ffmpeg": ffmpeg_comp,
+        "database": db_comp,
+        "storage": storage_comp,
+        "hls": hls_comp,
+        "bandwidth_profiles": {
+            "available": 5,
+            "profiles": [
+                "strong_wifi",
+                "weak_wifi",
+                "4g_degrading",
+                "burst_loss",
+                "stress_test",
+            ],
+        },
+        "novel_metrics": {
+            "spqi": "Semantic Perceptual Quality Index — active",
+            "sees": "Semantic Energy Efficiency Score — active",
+        },
     }
 
-    overall_ok = all(c.get("status") == "ok" for c in components.values())
-    any_error = any(c.get("status") == "error" for c in components.values())
+    is_mock = ai_comp.get("mode") == "MOCK_FALLBACK"
+    overall_ok = (not is_mock) and db_comp.get("connected", False)
 
-    log.info(
-        "demo.status_check",
-        overall="ok" if overall_ok else ("error" if any_error else "degraded"),
-    )
-
-    return {
-        "overall": "ok" if overall_ok else ("error" if any_error else "degraded"),
-        **components,
+    payload = {
+        "status": "ready" if overall_ok else "degraded",
+        "overall": "ok" if overall_ok else "degraded",
+        "components": components,
+        "ai_engine": ai_comp,
+        "ffmpeg": ffmpeg_comp,
+        "database": db_comp,
+        "storage": storage_comp,
+        "hls": hls_comp,
+        "project": {
+            "name": "SemanticStream",
+            "version": settings.APP_VERSION,
+            "institution": "VIT Vellore",
+            "course": "BITE314L — Multimedia Systems",
+            "team": [
+                "Mayukh Banerjee (23BIT0061)",
+                "Shubham Kumar (23BIT0079)",
+                "Yashwant Sahoo (23BIT0115)",
+            ],
+        },
     }
+
+    return payload

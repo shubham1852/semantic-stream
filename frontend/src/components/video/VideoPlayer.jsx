@@ -16,7 +16,7 @@ function formatTime(secs) {
   return `${m}:${s}`
 }
 
-export default function VideoPlayer({ src, poster, className = '', title = 'Processed Video' }) {
+export default function VideoPlayer({ src, poster, className = '', _title = 'Processed Video' }) {
   const videoRef = useRef(null)
   const hlsRef = useRef(null)
   const [playing, setPlaying] = useState(false)

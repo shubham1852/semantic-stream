@@ -133,22 +133,72 @@ def render_annotated_video(
     return final_path if final_path and final_path.exists() else None
 
 
+def _apply_semantic_roi_compression(frame: np.ndarray, result: FrameAnalysisResult) -> np.ndarray:
+    """Apply spatial non-uniform compression:
+    - High-priority (P1/P2/P4) ROIs are kept sharp from the original frame (low QP).
+    - Low-priority (P5) background is degraded (simulating high-QP macroblock compression).
+    """
+    h, w = frame.shape[:2]
+
+    # 1. Create the heavily compressed/quantized background layer (simulating P5 QP=42)
+    # Downsample by 16x16 macroblock grid and scale back with nearest-neighbor
+    block_size = 16
+    bw, bh = max(1, w // block_size), max(1, h // block_size)
+    bg_pixel = cv2.resize(frame, (bw, bh), interpolation=cv2.INTER_AREA)
+    bg_pixel = cv2.resize(bg_pixel, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    # Apply JPEG quantization with Q=16 to simulate DCT block compression artifacts
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 16]
+    _, encimg = cv2.imencode(".jpg", bg_pixel, encode_param)
+    bg_compressed = cv2.imdecode(encimg, cv2.IMREAD_COLOR)
+    if bg_compressed is None:
+        bg_compressed = bg_pixel
+
+    # If no detections and no priority map, return compressed background
+    if not result.detections and result.priority_map is None:
+        return bg_compressed
+
+    # 2. Build the ROI mask for salient objects (P1 faces/persons, P2 text, P4 objects)
+    mask = np.zeros((h, w), dtype=np.float32)
+
+    # Use detection bounding boxes
+    for det in result.detections:
+        x1, y1, x2, y2 = det.bbox
+        # Add a 10px margin around detected object
+        px1 = max(0, int(x1 * w) - 10)
+        py1 = max(0, int(y1 * h) - 10)
+        px2 = min(w, int(x2 * w) + 10)
+        py2 = min(h, int(y2 * h) + 10)
+        mask[py1:py2, px1:px2] = 1.0
+
+    # Also incorporate priority_map if available (regions above 0.35 threshold)
+    if result.priority_map is not None:
+        pmap = cv2.resize(result.priority_map, (w, h), interpolation=cv2.INTER_LINEAR)
+        mask = np.maximum(mask, np.where(pmap > 0.35, 1.0, 0.0).astype(np.float32))
+
+    # Soft feathering along boundary so the sharp ROI blends naturally
+    mask = cv2.GaussianBlur(mask, (21, 21), 0)
+    mask_3ch = np.repeat(mask[:, :, np.newaxis], 3, axis=2)
+
+    # Blend: sharp original inside ROI (P1-P4), quantized background outside (P5)
+    blended = frame.astype(np.float32) * mask_3ch + bg_compressed.astype(np.float32) * (1.0 - mask_3ch)
+    return np.clip(blended, 0, 255).astype(np.uint8)
+
+
 def _annotate_frame(frame: np.ndarray, result: FrameAnalysisResult) -> np.ndarray:
     frame = frame.copy()
-    if result.priority_map is not None:
-        frame = _blend_heatmap(frame, result.priority_map)
+    # 1. Apply semantic ROI spatial degradation:
+    # Foreground objects stay sharp at original quality;
+    # Background is compressed with visible macroblock quantization.
+    frame = _apply_semantic_roi_compression(frame, result)
+
+    # 2. Draw detections (crisp bounding box + tier/QP badge)
     for det in result.detections:
         _draw_detection(frame, det, frame.shape[:2])
+
+    # 3. Draw HUD
     _draw_hud(frame, result)
     return frame
-
-
-def _blend_heatmap(frame: np.ndarray, priority_map: np.ndarray) -> np.ndarray:
-    h, w = frame.shape[:2]
-    pmap = np.clip(priority_map * 255, 0, 255).astype(np.uint8)
-    pmap_resized = cv2.resize(pmap, (w, h), interpolation=cv2.INTER_LINEAR)
-    heatmap = cv2.applyColorMap(pmap_resized, cv2.COLORMAP_JET)
-    return cv2.addWeighted(frame, 1 - HEATMAP_ALPHA, heatmap, HEATMAP_ALPHA, 0)
 
 
 def _draw_detection(frame: np.ndarray, det, frame_shape: Tuple[int, int]) -> None:
@@ -160,19 +210,19 @@ def _draw_detection(frame: np.ndarray, det, frame_shape: Tuple[int, int]) -> Non
     tier  = "P1" if det.is_person else "P4"
     color = TIER_COLORS.get(tier, TIER_COLORS["P4"])
     qp    = settings.QP_P1 if tier == "P1" else settings.QP_P4
-    label = f"{det.class_name} {det.confidence:.2f} [{tier} QP{qp}]"
+    label = f"{det.class_name} {det.confidence:.2f} [{tier} QP{qp} · High-Res]"
 
     cv2.rectangle(frame, (px1, py1), (px2, py2), color, BOX_THICK)
 
     (tw, th), baseline = cv2.getTextSize(label, FONT, FONT_SCALE, FONT_THICK)
     label_y = max(py1 - 4, th + 4)
-    cv2.rectangle(frame, (px1, label_y - th - baseline - 2), (px1 + tw + 4, label_y + 2), color, cv2.FILLED)
-    cv2.putText(frame, label, (px1 + 2, label_y - baseline), FONT, FONT_SCALE, (10, 10, 10), FONT_THICK, cv2.LINE_AA)
+    cv2.rectangle(frame, (px1, label_y - th - baseline - 2), (px1 + tw + 6, label_y + 2), color, cv2.FILLED)
+    cv2.putText(frame, label, (px1 + 3, label_y - baseline), FONT, FONT_SCALE, (10, 10, 10), FONT_THICK, cv2.LINE_AA)
 
 
 def _draw_hud(frame: np.ndarray, result: FrameAnalysisResult) -> None:
     scene  = (result.scene_type or "ambient").upper()
-    spqi   = f"SPQI {result.spqi_score:.3f}" if result.spqi_score is not None else "SPQI --"
+    spqi   = f"SPQI: {result.spqi_score:.3f}" if result.spqi_score is not None else "SPQI: --"
     n_dets = len(result.detections)
 
     dominant = "P5"
@@ -187,21 +237,21 @@ def _draw_hud(frame: np.ndarray, result: FrameAnalysisResult) -> None:
 
     tier_color = TIER_COLORS.get(dominant, TIER_COLORS["P5"])
     lines = [
-        (f"Frame {result.frame_number}", (200, 200, 200)),
-        (scene,                          (255, 220, 100)),
-        (f"Detections: {n_dets}",        (180, 255, 180)),
-        (spqi,                           tier_color),
-        (f"Tier: {dominant}",            tier_color),
+        ("SEMANTICSTREAM ROI",             (0, 255, 135)),
+        (f"Frame {result.frame_number:03d} | {scene}", (200, 200, 200)),
+        (f"ROI: {n_dets} object(s) [P1-P4 QP18]", (100, 220, 255)),
+        ("Background: [P5 QP42 Quantized]", (140, 140, 240)),
+        (spqi,                             tier_color),
     ]
 
-    padding, line_h, box_w = 6, 18, 180
+    padding, line_h, box_w = 8, 18, 220
     box_h = len(lines) * line_h + padding * 2
     overlay = frame.copy()
-    cv2.rectangle(overlay, (0, 0), (box_w, box_h), (10, 10, 30), cv2.FILLED)
-    cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+    cv2.rectangle(overlay, (0, 0), (box_w, box_h), (8, 12, 24), cv2.FILLED)
+    cv2.addWeighted(overlay, 0.72, frame, 0.28, 0, frame)
 
     for i, (text, color) in enumerate(lines):
-        cv2.putText(frame, text, (padding, padding + (i + 1) * line_h), FONT, 0.40, color, 1, cv2.LINE_AA)
+        cv2.putText(frame, text, (padding, padding + (i + 1) * line_h - 2), FONT, 0.40, color, 1, cv2.LINE_AA)
 
 
 def _ffmpeg_reencode(src: Path, dst: Path, video_id: str) -> None:

@@ -1,5 +1,6 @@
 # SEMANTICSTREAM — PROGRESS TRACKER
-<!-- Last updated: 2026-09-02 -->
+<!-- Last updated: 2026-09-16 -->
+
 
 ---
 
@@ -88,21 +89,25 @@
 
 ---
 
-## TEST RESULTS (2026-09-02)
+## TEST RESULTS (2026-09-16)
 
 ```
 59 tests collected
-59 passed in 1.60s
+59 passed, 20 warnings in 1.51s
 ```
 
 ## KNOWN ISSUES / TECH DEBT (Remaining)
 
-| Issue | Location | Priority | Notes |
-|-------|----------|----------|-------|
-| Chunk size >500KB warning | Frontend build | LOW | Cosmetic only — does not affect runtime |
-| Dynamic import warning for useAppStore | client.js | LOW | Intentional to break circular dep |
-| VideoPlayer not wired to ResultsPage | ResultsPage.jsx | LOW | Shows PDF/metrics; video playback optional |
-| HLS encoding not auto-triggered | Backend | LOW | Offline process; raw video fallback works |
+| Issue | Location | Priority | Status | Notes |
+|-------|----------|----------|--------|-------|
+| Chunk size >500KB warning | Frontend build | LOW | Open | Cosmetic only — code splitting optimization |
+| Dynamic import warning for useAppStore | client.js | LOW | Open | Intentional to break circular dependency |
+| Landing page 404 on root route | Frontend | HIGH | Resolved | Root route verified, host configured to 0.0.0.0 |
+| Demo status endpoint 404 | Backend | MEDIUM | Resolved | Multi-prefix router registered, all 5 component checks passing |
+| VideoPlayer not wired to ResultsPage | ResultsPage.jsx | LOW | Resolved | VideoPlayer embedded above metrics with stream preview |
+| HLS encoding not auto-triggered | Backend | LOW | Resolved | Auto-triggered via asyncio task + raw MP4 fallback |
+| Processed video playback seeking | Frontend / Backend | HIGH | Resolved | HTTP 206 byte-range requests + dual-mode player |
+| Real application screenshots | Docs | MEDIUM | Resolved | 5 full-fidelity screenshots captured into docs/screenshots/ |
 
 ---
 
@@ -116,6 +121,8 @@
 | Phase 4 — API Layer | ✅ Complete | 100% |
 | Phase 5 — Frontend | ✅ Complete | 100% |
 | Phase 6 — Integration & Polish | ✅ Complete | 100% |
+| Phase 7 — Gap Fixes & Elevation | ✅ Complete | 100% |
+| Phase 8 — Streaming Engine, Docker & ROI Rendering | ✅ Complete | 100% |
 | **Overall** | ✅ **COMPLETE** | **100%** |
 
 ---
@@ -146,10 +153,38 @@
 - [x] **README.md** — Verified Results section (3-strategy table), Topics line
 - [x] **CONTRIBUTING.md** — contributor guide created
 
-### Post-Fix Status
-- Backend: 59 tests passing (no core logic modified)
-- `/api/v1/demo/status` returns all 5 component keys
-- Upload → Analyse → View Results → Watch Video: full flow working
-- Live Camera: mock banner + latency chart + detection count all active
-- Settings Reset to Defaults: confirmed functional (existing implementation)
+---
+
+## PHASE 8 — STREAMING ENGINE, DOCKER & ROI RENDERING (2026-09-16)
+
+- [x] **`backend/services/render_service.py`** — Annotated video rendering service:
+       - Generates H.264 browser-compatible MP4 using OpenCV `avc1` direct output with `mp4v` + FFmpeg fallback.
+       - Non-uniform spatial ROI compression simulation: maintains high fidelity (P1/P2/P4 low QP) on detected objects while degrading P5 background (16x16 macroblock downsampling + JPEG/DCT quantization simulating QP=42) with feathered Gaussian boundary blending.
+       - Dynamic HUD overlay displaying SEMANTICSTREAM branding, frame index, scene type, detected ROI count, background tier (P5 QP42), and real-time SPQI score.
+- [x] **`backend/services/streaming_service.py`** — Enhanced stream resolution & HLS transcoding:
+       - Fallback hierarchy: HLS playlist (`master.m3u8`) → Processed annotated MP4 (`{video_id}_annotated.mp4`) → Encoded MP4 → Raw source MP4.
+       - Asynchronous `generate_hls()` method with libx264, CRF 22, and 4s VOD segments.
+- [x] **`backend/api/routes/stream.py`** — Streaming API improvements:
+       - HTTP 206 Partial Content (Byte-Range requests) support for seamless scrubbing and seeking in HTML5 video players.
+       - `/api/v1/stream/{video_id}/status` endpoint returning stream readiness and stream format (`hls` / `raw` / `none`).
+       - `/api/v1/stream/{video_id}/raw` direct MP4 streaming endpoint.
+- [x] **`frontend/src/components/video/VideoPlayer.jsx`** — Dual-mode video player:
+       - Supports both HLS.js streaming and native HTML5 MP4 fallback.
+       - Custom range-request compatible seeking, interactive playback controls, and buffering states.
+- [x] **`frontend/src/pages/ResultsPage.jsx`** — Video player & metric display enhancements:
+       - Embedded VideoPlayer card directly above metrics for processed stream preview.
+       - Metric formatting updates: Bitrate in Mbps, SEES score in %, Face SSIM and Background SSIM breakdowns, wall-clock encode duration.
+- [x] **`frontend/src/pages/StreamingPage.jsx`** — Stream auto-detection:
+       - Polling for stream readiness and automatic switching between HLS and raw MP4 playback.
+- [x] **`frontend/src/components/ui/Badge.jsx`** — Extended badge component with additional variants and tier badge rendering.
+- [x] **`frontend/vite.config.js` & `frontend/nginx.conf`** — IPv4 proxy configuration:
+       - Explicit `127.0.0.1:8000` target for API, health, and WebSocket proxies, preventing Windows localhost IPv6 connection delays.
+- [x] **`frontend/src/store/useAppStore.js`** — Default bandwidth profile updated to `broadband`.
+- [x] **`docker-compose.yml` & `RUNBOOK.md`** — Multi-container Docker deployment with health checks and comprehensive operational runbook.
+
+### Current Status
+- Backend: 59 unit tests passing (`backend/tests`)
+- Video Pipeline: End-to-end Upload → YOLO Detection → Semantic Priority Map → Non-Uniform ROI Rendering → HTTP 206 Streaming / HLS
+- Frontend: Responsive Dashboard, Results preview player, Live Camera with HUD & latency tracking, Experiment comparison charts
+
 

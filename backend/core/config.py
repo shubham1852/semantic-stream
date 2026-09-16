@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD: float = 0.45
     NMS_THRESHOLD: float = 0.45
     INFERENCE_WIDTH: int = 640
-    INFERENCE_HEIGHT: int = 480
+    INFERENCE_HEIGHT: int = 640
 
     # ── Priority Tier Scores ─────────────────────────────────────────────────
     PRIORITY_P1: float = 1.0   # Face / Person

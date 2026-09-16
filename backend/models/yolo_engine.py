@@ -191,7 +191,13 @@ class YOLOEngine:
             self._session = ort.InferenceSession(
                 self._model_path, providers=providers
             )
-            self._input_name = self._session.get_inputs()[0].name
+            input_tensor = self._session.get_inputs()[0]
+            self._input_name = input_tensor.name
+            if len(input_tensor.shape) == 4:
+                if isinstance(input_tensor.shape[2], int):
+                    self._inf_h = input_tensor.shape[2]
+                if isinstance(input_tensor.shape[3], int):
+                    self._inf_w = input_tensor.shape[3]
             self._mock_mode = False
             log.info(
                 "yolo_engine_startup",

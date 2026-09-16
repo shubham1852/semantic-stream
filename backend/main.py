@@ -128,6 +128,7 @@ def create_app() -> FastAPI:
     app.include_router(bandwidth_router,  prefix=prefix, tags=["Bandwidth"])
     app.include_router(report_router,     prefix=prefix, tags=["Report"])
     app.include_router(demo_router,       prefix=prefix, tags=["Demo"])
+    app.include_router(demo_router,       prefix=f"{prefix}/demo", tags=["Demo"])
     app.include_router(ws_router,         tags=["WebSocket"])
 
     # ── Exception handlers ────────────────────────────────────────────────────

@@ -31,7 +31,26 @@ The result across our test suite: **42% bitrate reduction** with a **+23% improv
 
 ---
 
+## Screenshots
 
+<div align="center">
+
+**Dashboard — Session overview and system status**
+![Dashboard](docs/screenshots/01-dashboard.png)
+
+**Analysis Results — Annotated output with visible ROI compression**
+![Results](docs/screenshots/02-results-player.png)
+
+**Live Camera — Real-time semantic priority heatmap on webcam feed**
+![Live Camera](docs/screenshots/03-live-camera.png)
+
+**Experiment Workbench — 3-strategy comparison (SemanticStream wins)**
+![Experiments](docs/screenshots/04-experiment.png)
+
+**Research Page — SPQI and SEES novel metric formulas**
+![Research](docs/screenshots/05-research.png)
+
+</div>
 
 ---
 

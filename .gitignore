@@ -91,3 +91,8 @@ backend/.pytest_cache/
 # ── Backend venv (may live inside backend/) ────────────────────────────────────
 backend/.venv/
 backend/venv/
+
+# ── Archives ───────────────────────────────────────────────────────────────────
+*.zip
+*.tar.gz
+*.rar
