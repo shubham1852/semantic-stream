@@ -10,7 +10,8 @@ import { useWebSocket } from '../../hooks/useWebSocket'
 import DetectionOverlay from './DetectionOverlay'
 import { Camera, CameraOff, Zap, Eye } from 'lucide-react'
 
-const FRAME_INTERVAL_MS = 80 // ~12 fps to server
+const FPS_TARGET = 10
+const FRAME_INTERVAL_MS = 1000 / FPS_TARGET // 100ms (10 fps)
 
 export default function LiveCameraView({ onConnectionChange, onFrameReceived }) {
   const videoRef = useRef(null)
@@ -61,14 +62,19 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
     setCameraOn(false)
   }, [disconnect])
 
-  // Capture and send frames
+  // Capture and send frames at target 10fps
   useEffect(() => {
     if (!cameraOn || !isConnected) return
 
+    let lastSendTime = 0
     const capture = () => {
       const video = videoRef.current
       const canvas = captureCanvasRef.current
       if (!video || !canvas || video.readyState < 2) return
+
+      const now = Date.now()
+      if (now - lastSendTime < FRAME_INTERVAL_MS) return
+      lastSendTime = now
 
       const ctx = canvas.getContext('2d')
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
@@ -77,13 +83,15 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
       sendFrame(base64)
     }
 
-    frameTimerRef.current = setInterval(capture, FRAME_INTERVAL_MS)
+    frameTimerRef.current = setInterval(capture, Math.floor(FRAME_INTERVAL_MS / 2))
     return () => clearInterval(frameTimerRef.current)
   }, [cameraOn, isConnected, sendFrame])
 
-  // Heatmap image from server
+  // Heatmap image from server (handles both JPEG and PNG base64 payloads)
   const heatmapSrc = lastFrame?.priority_map_base64
-    ? `data:image/png;base64,${lastFrame.priority_map_base64}`
+    ? (lastFrame.priority_map_base64.startsWith('data:')
+        ? lastFrame.priority_map_base64
+        : `data:image/jpeg;base64,${lastFrame.priority_map_base64}`)
     : null
 
   const detections = lastFrame?.detections ?? []
@@ -92,6 +100,13 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
   const priorityCoverage = lastFrame?.pcs != null
     ? `${Number(lastFrame.pcs).toFixed(1)}%`
     : (lastFrame?.spqi != null && lastFrame.spqi > 0 ? Number(lastFrame.spqi).toFixed(2) : '—')
+
+  // Compute detection count per priority tier
+  const tierCounts = detections.reduce((acc, det) => {
+    const tier = (det.priority_tier || 'P4').toUpperCase().replace('TIER_', '')
+    acc[tier] = (acc[tier] || 0) + 1
+    return acc
+  }, {})
 
   const getSceneColor = (st) => {
     const s = (st || '').toUpperCase()
@@ -122,7 +137,7 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
 
         {/* Live stats */}
         {cameraOn && (
-          <div className="flex items-center gap-6 text-xs font-mono">
+          <div className="flex items-center gap-6 text-xs font-mono flex-wrap">
             <div className="flex items-center gap-1.5">
               <Eye size={13} className="text-data-green" />
               <span className="text-text-muted">Priority Coverage</span>
@@ -138,6 +153,34 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
               <span className={`font-medium ${getSceneColor(sceneType)}`}>
                 {sceneType === 'ambient' ? 'GENERAL' : (sceneType ? sceneType.toUpperCase() : '—')}
               </span>
+            </div>
+
+            {/* Tier breakdown — show how many detections per tier */}
+            <div className="flex items-center gap-3 pl-3 border-l border-white/10">
+              {tierCounts.P1 > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-sm bg-green-400" />
+                  <span className="text-green-400 font-semibold">P1×{tierCounts.P1}</span>
+                </span>
+              )}
+              {tierCounts.P2 > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-sm bg-cyan-400" />
+                  <span className="text-cyan-400 font-semibold">P2×{tierCounts.P2}</span>
+                </span>
+              )}
+              {tierCounts.P3 > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-sm bg-amber-400" />
+                  <span className="text-amber-400 font-semibold">P3×{tierCounts.P3}</span>
+                </span>
+              )}
+              {tierCounts.P4 > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-sm bg-orange-400" />
+                  <span className="text-orange-400 font-semibold">P4×{tierCounts.P4}</span>
+                </span>
+              )}
             </div>
           </div>
         )}

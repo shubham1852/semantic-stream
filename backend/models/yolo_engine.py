@@ -61,6 +61,11 @@ class Detection:
     y1: int
     x2: int
     y2: int
+    priority_tier: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.priority_tier:
+            self.priority_tier = "P1" if self.is_person else "P4"
 
     # Derived helpers ─────────────────────────────────────────────────────────
 
@@ -76,11 +81,34 @@ class Detection:
 
     @property
     def is_person(self) -> bool:
-        return self.class_id in _PERSON_CLASSES
+        return self.class_id in _PERSON_CLASSES or self.class_id == 0
 
     @property
     def center(self) -> tuple[int, int]:
         return ((self.x1 + self.x2) // 2, (self.y1 + self.y2) // 2)
+
+
+# ── Live detection tier mapping ───────────────────────────────────────────────
+
+LIVE_DETECTION_CLASSES = {
+    0: ("person", "P1"),      # Highest priority
+    56: ("chair", "P4"),
+    57: ("couch", "P4"),
+    63: ("laptop", "P4"),
+    64: ("mouse", "P4"),
+    65: ("remote", "P4"),
+    66: ("keyboard", "P4"),
+    67: ("cell phone", "P4"),
+    73: ("book", "P4"),
+}
+
+
+def get_priority_tier(class_id: int, class_name: str = "") -> str:
+    """Map YOLO class to SemanticStream priority tier."""
+    person_classes = {0, 1}  # person, bicycle
+    if class_id in person_classes or class_name.lower() in ("person", "bicycle"):
+        return "P1"
+    return "P4"
 
 
 # ── COCO class name table ─────────────────────────────────────────────────────
@@ -228,7 +256,11 @@ class YOLOEngine:
 
     # ── Inference ─────────────────────────────────────────────────────────────
 
-    def detect(self, frame_bgr: np.ndarray) -> List[Detection]:
+    def detect(
+        self,
+        frame_bgr: np.ndarray,
+        conf_threshold: Optional[float] = None,
+    ) -> List[Detection]:
         """Run detection on a single BGR frame.
 
         Parameters
@@ -236,6 +268,8 @@ class YOLOEngine:
         frame_bgr:
             OpenCV-style BGR frame as a uint8 NumPy array of shape
             ``(H, W, 3)``.
+        conf_threshold:
+            Optional confidence threshold override.
 
         Returns
         -------
@@ -255,7 +289,7 @@ class YOLOEngine:
         try:
             blob, scale_x, scale_y = self._preprocess(frame_bgr)
             raw = self._session.run(None, {self._input_name: blob})[0]
-            detections = self._postprocess(raw, scale_x, scale_y)
+            detections = self._postprocess(raw, scale_x, scale_y, conf_threshold)
             elapsed_ms = (time.perf_counter() - t0) * 1000
             log.debug("yolo_infer", detections=len(detections), elapsed_ms=round(elapsed_ms, 1))
             return detections
@@ -286,6 +320,7 @@ class YOLOEngine:
         raw: np.ndarray,
         scale_x: float,
         scale_y: float,
+        conf_threshold: Optional[float] = None,
     ) -> List[Detection]:
         """Parse YOLOv8 ONNX output and apply NMS.
 
@@ -294,6 +329,8 @@ class YOLOEngine:
         4–83 are class probabilities.
         """
         import cv2  # type: ignore
+
+        thresh = conf_threshold if conf_threshold is not None else self._conf_threshold
 
         output = raw[0]  # (84, num_anchors)
         # Transpose so each row is one anchor
@@ -309,7 +346,7 @@ class YOLOEngine:
             class_id = int(np.argmax(class_scores))
             confidence = float(class_scores[class_id])
 
-            if confidence < self._conf_threshold:
+            if confidence < thresh:
                 continue
 
             # Convert centre-wh → pixel x1y1x2y2 (inference canvas)
@@ -325,25 +362,47 @@ class YOLOEngine:
         if not boxes:
             return []
 
+        # Batched NMS: offset coordinates by class_id * 4096 so distinct classes
+        # (e.g. person vs chair/laptop) are preserved and not aggressively merged.
+        boxes_for_nms = [
+            [b[0] + cid * 4096, b[1] + cid * 4096, b[2], b[3]]
+            for b, cid in zip(boxes, class_ids)
+        ]
+
         # Apply NMS
         indices = cv2.dnn.NMSBoxes(
-            boxes, scores, self._conf_threshold, self._nms_threshold
+            boxes_for_nms, scores, thresh, self._nms_threshold
         )
         if len(indices) == 0:
             return []
 
+        frame_area = (scale_x * self._inf_w) * (scale_y * self._inf_h)
         detections: List[Detection] = []
         for i in indices.flatten():
             bx, by, bw, bh = boxes[i]
             cid = class_ids[i]
+            x1 = max(0, int(bx * scale_x))
+            y1 = max(0, int(by * scale_y))
+            x2 = int((bx + bw) * scale_x)
+            y2 = int((by + bh) * scale_y)
+            box_area = max(0, x2 - x1) * max(0, y2 - y1)
+
+            # Area filter: ignore boxes spanning >= 80% of the entire frame (full-frame errors)
+            if frame_area > 0 and box_area >= 0.80 * frame_area:
+                continue
+
+            cname = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"cls_{cid}"
+            tier = get_priority_tier(cid, cname)
+
             det = Detection(
                 class_id=cid,
-                class_name=COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"cls_{cid}",
+                class_name=cname,
                 confidence=scores[i],
-                x1=max(0, int(bx * scale_x)),
-                y1=max(0, int(by * scale_y)),
-                x2=int((bx + bw) * scale_x),
-                y2=int((by + bh) * scale_y),
+                x1=x1,
+                y1=y1,
+                x2=x2,
+                y2=y2,
+                priority_tier=tier,
             )
             detections.append(det)
 

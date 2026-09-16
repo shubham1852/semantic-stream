@@ -50,6 +50,7 @@ export default function LivePage() {
 
   // ── Improvement 3: Detection Count Badge ────────────────────────────────
   const [detectionCount, setDetectionCount] = useState(0)
+  const [tierCounts, setTierCounts] = useState({})
 
   const handleFrameReceived = useCallback((frame) => {
     // Update rolling latency history
@@ -60,9 +61,15 @@ export default function LivePage() {
       return next.length > MAX_LATENCY_POINTS ? next.slice(-MAX_LATENCY_POINTS) : next
     })
 
-    // Update detection count
-    const count = Array.isArray(frame?.detections) ? frame.detections.length : 0
-    setDetectionCount(count)
+    // Update detection count & tier breakdown
+    const dets = Array.isArray(frame?.detections) ? frame.detections : []
+    setDetectionCount(dets.length)
+    const counts = dets.reduce((acc, det) => {
+      const t = (det.priority_tier || 'P4').toUpperCase().replace('TIER_', '')
+      acc[t] = (acc[t] || 0) + 1
+      return acc
+    }, {})
+    setTierCounts(counts)
   }, [])
 
   return (
@@ -129,12 +136,22 @@ export default function LivePage() {
           />
           <div>
             <p className="text-xs text-text-muted">Detections</p>
-            <p
-              className="text-sm font-semibold font-mono"
-              style={{ color: detectionCount > 0 ? '#00FF87' : '#F59E0B' }}
-            >
-              {detectionCount} {detectionCount === 1 ? 'object' : 'objects'}
-            </p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p
+                className="text-sm font-semibold font-mono"
+                style={{ color: detectionCount > 0 ? '#00FF87' : '#F59E0B' }}
+              >
+                {detectionCount} {detectionCount === 1 ? 'object' : 'objects'}
+              </p>
+              {detectionCount > 0 && (
+                <span className="text-[11px] font-mono text-text-muted">
+                  ({[
+                    tierCounts.P1 ? `P1×${tierCounts.P1}` : null,
+                    tierCounts.P4 ? `P4×${tierCounts.P4}` : null,
+                  ].filter(Boolean).join(' ') || `${detectionCount} total`})
+                </span>
+              )}
+            </div>
           </div>
         </Card>
       </div>
