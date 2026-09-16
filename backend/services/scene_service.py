@@ -53,14 +53,15 @@ class SceneType:
     ACTION     = "action"
     MOTION     = "motion"
     TEXT_HEAVY = "text_heavy"
-    AMBIENT    = "ambient"
+    AMBIENT    = "GENERAL"
+    GENERAL    = "GENERAL"
 
 ALL_SCENE_TYPES = [
     SceneType.DIALOGUE,
     SceneType.ACTION,
     SceneType.MOTION,
     SceneType.TEXT_HEAVY,
-    SceneType.AMBIENT,
+    SceneType.GENERAL,
 ]
 
 
@@ -362,7 +363,7 @@ class SceneService:
             return SceneType.DIALOGUE
         if motion_frac >= motion_thresh:
             return SceneType.MOTION
-        return SceneType.AMBIENT
+        return "GENERAL"
 
     # ── Utility helpers ───────────────────────────────────────────────────────
 

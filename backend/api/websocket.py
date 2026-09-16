@@ -94,6 +94,8 @@ async def live_camera_ws(websocket: WebSocket) -> None:
 
             response = analytics_service.summarise_frame(result)
             response["processing_time_ms"] = round(processing_ms, 2)
+            if response.get("spqi") == 0.0 or response.get("spqi") == 0:
+                response["spqi"] = None
             await websocket.send_json(response)
 
     except WebSocketDisconnect:

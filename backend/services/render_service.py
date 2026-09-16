@@ -127,10 +127,26 @@ def render_annotated_video(
             pass
 
     final_path = output_path if output_path.exists() else (temp_path if temp_path.exists() else None)
+    if final_path and final_path.exists():
+        subfolder = settings.PROCESSED_DIR / video_id
+        subfolder.mkdir(parents=True, exist_ok=True)
+        subfolder_file = subfolder / f"{video_id}_annotated.mp4"
+        if not subfolder_file.exists():
+            try:
+                import shutil
+                shutil.copyfile(final_path, subfolder_file)
+            except Exception:
+                pass
+
     elapsed = time.perf_counter() - t0
     size_mb = final_path.stat().st_size / 1024 / 1024 if final_path and final_path.exists() else 0
     log.info("render.done", video_id=video_id, elapsed_s=round(elapsed, 2), size_mb=round(size_mb, 2))
     return final_path if final_path and final_path.exists() else None
+
+
+MACROBLOCK_SIZE = 16
+JPEG_QUALITY = 15
+BACKGROUND_BLUR_SIGMA = 2.0
 
 
 def _apply_semantic_roi_compression(frame: np.ndarray, result: FrameAnalysisResult) -> np.ndarray:
@@ -141,14 +157,16 @@ def _apply_semantic_roi_compression(frame: np.ndarray, result: FrameAnalysisResu
     h, w = frame.shape[:2]
 
     # 1. Create the heavily compressed/quantized background layer (simulating P5 QP=42)
+    # Apply Gaussian blur on background before JPEG quantization
+    bg_blurred = cv2.GaussianBlur(frame, (0, 0), BACKGROUND_BLUR_SIGMA)
+
     # Downsample by 16x16 macroblock grid and scale back with nearest-neighbor
-    block_size = 16
-    bw, bh = max(1, w // block_size), max(1, h // block_size)
-    bg_pixel = cv2.resize(frame, (bw, bh), interpolation=cv2.INTER_AREA)
+    bw, bh = max(1, w // MACROBLOCK_SIZE), max(1, h // MACROBLOCK_SIZE)
+    bg_pixel = cv2.resize(bg_blurred, (bw, bh), interpolation=cv2.INTER_AREA)
     bg_pixel = cv2.resize(bg_pixel, (w, h), interpolation=cv2.INTER_NEAREST)
 
-    # Apply JPEG quantization with Q=16 to simulate DCT block compression artifacts
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 16]
+    # Apply JPEG quantization with Q=15 to simulate DCT block compression artifacts
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
     _, encimg = cv2.imencode(".jpg", bg_pixel, encode_param)
     bg_compressed = cv2.imdecode(encimg, cv2.IMREAD_COLOR)
     if bg_compressed is None:
@@ -176,9 +194,9 @@ def _apply_semantic_roi_compression(frame: np.ndarray, result: FrameAnalysisResu
         pmap = cv2.resize(result.priority_map, (w, h), interpolation=cv2.INTER_LINEAR)
         mask = np.maximum(mask, np.where(pmap > 0.35, 1.0, 0.0).astype(np.float32))
 
-    # Soft feathering along boundary so the sharp ROI blends naturally
-    mask = cv2.GaussianBlur(mask, (21, 21), 0)
-    mask_3ch = np.repeat(mask[:, :, np.newaxis], 3, axis=2)
+    # Feather the boundary with Gaussian blur on the mask (31x31 kernel for smooth transition)
+    feathered_mask = cv2.GaussianBlur(mask.astype(np.float32), (31, 31), 0)
+    mask_3ch = np.repeat(feathered_mask[:, :, np.newaxis], 3, axis=2)
 
     # Blend: sharp original inside ROI (P1-P4), quantized background outside (P5)
     blended = frame.astype(np.float32) * mask_3ch + bg_compressed.astype(np.float32) * (1.0 - mask_3ch)
@@ -221,7 +239,8 @@ def _draw_detection(frame: np.ndarray, det, frame_shape: Tuple[int, int]) -> Non
 
 
 def _draw_hud(frame: np.ndarray, result: FrameAnalysisResult) -> None:
-    scene  = (result.scene_type or "ambient").upper()
+    scene_raw = (result.scene_type or "GENERAL").upper()
+    scene  = "GENERAL" if scene_raw in ("AMBIENT", "NONE", "") else scene_raw
     spqi   = f"SPQI: {result.spqi_score:.3f}" if result.spqi_score is not None else "SPQI: --"
     n_dets = len(result.detections)
 

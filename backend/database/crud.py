@@ -528,16 +528,23 @@ async def list_history(
         offset: Number of rows to skip.
 
     Returns:
-        List of dicts with keys: session_id, filename, bandwidth_profile,
-        avg_spqi, bitrate_reduction_pct, created_at (ISO string).
+        List of dicts with keys: session_id, job_id, video_id, filename, bandwidth_profile,
+        avg_spqi, avg_ssim, avg_psnr, avg_bitrate_kbps, bitrate_reduction_pct,
+        status, created_at (ISO string).
     """
     result = await db.execute(
         select(
             AnalysisJob.id.label("session_id"),
+            AnalysisJob.id.label("job_id"),
+            AnalysisJob.video_id,
             Video.filename,
             AnalysisJob.bandwidth_profile,
             AnalysisJob.avg_spqi,
+            AnalysisJob.avg_ssim,
+            AnalysisJob.avg_psnr,
+            AnalysisJob.avg_bitrate_kbps,
             AnalysisJob.bitrate_reduction_pct,
+            AnalysisJob.status,
             AnalysisJob.started_at.label("created_at"),
         )
         .join(Video, AnalysisJob.video_id == Video.id)

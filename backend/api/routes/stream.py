@@ -9,12 +9,15 @@ GET /api/v1/stream/{video_id}/{segment}     — Individual HLS .ts segments.
 GET /api/v1/frame/{video_id}/{frame_number} — Single annotated frame.
 """
 
+import os
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.config import settings
 from backend.database.database import get_db
 from backend.database import crud
 from backend.services.streaming_service import StreamingService
@@ -27,14 +30,113 @@ router = APIRouter()
 _RAW_VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm"})
 
 
-def _file_response_for_path(resolved_path: str) -> FileResponse:
-    """Return a FileResponse with the correct Content-Type.
-
-    When FFmpeg is missing the streaming service falls back to the raw upload
-    file.  We must serve it as ``video/mp4`` so the browser can play it
-    natively — hls.js will otherwise try to parse the MP4 bytes as an HLS
-    manifest and fail silently, leaving the player blank.
+def _resolve_stream_file(video_id: str, video_filepath: Optional[str] = None) -> Optional[Path]:
+    """Find the best available video file in the priority hierarchy:
+    1. Annotated MP4 with HUD & bounding boxes (settings.PROCESSED_DIR / f'{video_id}_annotated.mp4')
+    2. Subfolder annotated MP4 (settings.PROCESSED_DIR / video_id / f'{video_id}_annotated.mp4')
+    3. Storage root processed annotated MP4
+    4. Encoded semantic stream MP4
+    5. Subfolder encoded MP4
+    6. Original uploaded video
     """
+    base = settings.STORAGE_DIR / "processed" / video_id
+    base_sub = settings.PROCESSED_DIR / video_id
+    root_base = Path("storage") / "processed" / video_id
+    candidates = [
+        settings.PROCESSED_DIR / f"{video_id}_annotated.mp4",
+        base / f"{video_id}_annotated.mp4",
+        base_sub / f"{video_id}_annotated.mp4",
+        Path("storage") / "processed" / f"{video_id}_annotated.mp4",
+        root_base / f"{video_id}_annotated.mp4",
+        settings.PROCESSED_DIR / f"{video_id}_semanticstream.mp4",
+        settings.PROCESSED_DIR / f"{video_id}_encoded.mp4",
+        base / f"{video_id}_encoded.mp4",
+        base_sub / f"{video_id}_encoded.mp4",
+        settings.PROCESSED_DIR / f"{video_id}_uniform_abr.mp4",
+    ]
+    if video_filepath:
+        candidates.extend([
+            Path(video_filepath),
+            settings.UPLOAD_DIR / Path(video_filepath).name,
+            Path("storage") / "uploads" / Path(video_filepath).name,
+            settings.UPLOAD_DIR / f"{video_id}.mp4",
+        ])
+    for c in candidates:
+        if c and Path(c).exists() and Path(c).is_file():
+            return Path(c)
+    return None
+
+
+def _stream_video_file(file_path: Path, request: Request):
+    """Serve MP4 with full HTTP 206 Partial Content (Byte-Range) seeking support."""
+    file_size = os.path.getsize(file_path)
+
+    if request.method == "HEAD":
+        return Response(
+            status_code=200,
+            media_type="video/mp4",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+                "Cache-Control": "no-cache",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+    range_header = request.headers.get("Range")
+
+    if range_header:
+        # Parse Range: bytes=start-end
+        range_val = range_header.replace("bytes=", "").strip()
+        parts = range_val.split("-")
+        start = int(parts[0]) if parts[0] else 0
+        end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+        end = min(end, file_size - 1)
+        chunk_size = end - start + 1
+
+        def iter_file():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = chunk_size
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            iter_file(),
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_size),
+                "Cache-Control": "no-cache",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    else:
+        def iter_full():
+            with open(file_path, "rb") as f:
+                while chunk := f.read(65536):
+                    yield chunk
+
+        return StreamingResponse(
+            iter_full(),
+            media_type="video/mp4",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+                "Cache-Control": "no-cache",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+
+def _file_response_for_path(resolved_path: str) -> FileResponse:
+    """Return a FileResponse with the correct Content-Type."""
     suffix = Path(resolved_path).suffix.lower()
 
     if suffix in _RAW_VIDEO_EXTENSIONS:
@@ -44,7 +146,7 @@ def _file_response_for_path(resolved_path: str) -> FileResponse:
             headers={
                 "Cache-Control": "no-cache",
                 "Accept-Ranges": "bytes",
-                # Custom header so the frontend knows this is not HLS
+                "Access-Control-Allow-Origin": "*",
                 "X-Stream-Type": "raw",
             },
         )
@@ -55,6 +157,7 @@ def _file_response_for_path(resolved_path: str) -> FileResponse:
         media_type="application/vnd.apple.mpegurl",
         headers={
             "Cache-Control": "no-cache",
+            "Access-Control-Allow-Origin": "*",
             "X-Stream-Type": "hls",
         },
     )
@@ -68,16 +171,11 @@ async def get_stream_status(
     video_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    """Return stream readiness for the frontend player.
-
-    Checks whether an HLS playlist or processed annotated MP4 has been generated
-    for this video.
-    """
+    """Return stream readiness for the frontend player."""
     video = await crud.get_video(db, video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    service = StreamingService(db)
     hls_directory = hls_dir(video_id)
     playlist = hls_directory / "master.m3u8"
     hls_ready = playlist.exists()
@@ -86,24 +184,16 @@ async def get_stream_status(
     if hls_ready:
         segment_count = len(list(hls_directory.glob("*.ts")))
 
-    processed_ready = False
-    try:
-        p_path = await service.get_processed_video_path(video_id)
-        # Check that it's an annotated/processed file, not merely raw
-        if "_annotated" in p_path or "_encoded" in p_path or "_semanticstream" in p_path:
-            processed_ready = Path(p_path).exists()
-    except Exception:
-        pass
+    resolved_file = _resolve_stream_file(video_id, video.filepath if video else None)
+    processed_ready = resolved_file is not None and "_annotated" in resolved_file.name
+    fallback_available = resolved_file is not None
 
-    raw_path = Path(video.filepath)
-    fallback_available = raw_path.exists()
-
-    if hls_ready:
+    if processed_ready:
+        stream_type = "raw"  # prefer annotated MP4 direct playback
+        stream_url = f"/api/v1/stream/{video_id}/raw"
+    elif hls_ready:
         stream_type = "hls"
         stream_url = f"/api/v1/stream/{video_id}/playlist.m3u8"
-    elif processed_ready:
-        stream_type = "processed"
-        stream_url = f"/api/v1/stream/{video_id}/processed"
     elif fallback_available:
         stream_type = "raw"
         stream_url = f"/api/v1/stream/{video_id}/raw"
@@ -112,7 +202,7 @@ async def get_stream_status(
         stream_url = None
 
     return JSONResponse({
-        "ready": hls_ready or processed_ready or fallback_available,
+        "ready": processed_ready or hls_ready or fallback_available,
         "hls_ready": hls_ready,
         "processed_ready": processed_ready,
         "segment_count": segment_count,
@@ -129,24 +219,15 @@ async def get_stream_status(
 )
 async def get_stream_processed(
     video_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-) -> FileResponse:
-    """Serve the annotated processed MP4 video directly with full byte-range support.
-
-    Falls back to the raw source video if annotated rendering has not completed.
-    """
-    service = StreamingService(db)
-    resolved_path = await service.get_processed_video_path(video_id)
-    return FileResponse(
-        resolved_path,
-        media_type="video/mp4",
-        headers={
-            "Cache-Control": "no-cache",
-            "Accept-Ranges": "bytes",
-            "Content-Disposition": f'inline; filename="{Path(resolved_path).name}"',
-            "X-Stream-Type": "processed",
-        },
-    )
+):
+    """Serve the annotated processed MP4 video directly with full byte-range support."""
+    video = await crud.get_video(db, video_id)
+    file_path = _resolve_stream_file(video_id, video.filepath if video else None)
+    if not file_path:
+        raise HTTPException(status_code=404, detail="No processed video found")
+    return _stream_video_file(file_path, request)
 
 
 @router.api_route(
@@ -158,11 +239,7 @@ async def get_stream_playlist(
     video_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    """Serve the HLS playlist (.m3u8) or processed video fallback.
-
-    Falls back to the processed video file when FFmpeg / HLS has not run yet.
-    Content-Type is set correctly for whichever file is returned.
-    """
+    """Serve the HLS playlist (.m3u8) or processed video fallback."""
     service = StreamingService(db)
     resolved_path = await service.get_playlist_path(video_id)
     return _file_response_for_path(resolved_path)
@@ -171,69 +248,42 @@ async def get_stream_playlist(
 @router.api_route(
     "/stream/{video_id}/raw",
     methods=["GET", "HEAD"],
-    summary="Serve raw source video (MP4 direct playback)",
+    summary="Serve annotated or source video (MP4 direct playback with HTTP 206 byte-range)",
 )
 async def get_stream_raw(
     video_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-) -> FileResponse:
-    """Serve the original uploaded video file directly.
-
-    Used as a native-player fallback when HLS is not available (e.g. FFmpeg
-    not installed on the host).
-    """
-    from backend.database import crud
-
+):
+    """Serve the annotated MP4 video directly with fallback hierarchy and HTTP 206 byte-range support."""
     video = await crud.get_video(db, video_id)
-    if video is None:
-        raise HTTPException(status_code=404, detail="Video not found")
+    file_path = _resolve_stream_file(video_id, video.filepath if video else None)
+    if not file_path:
+        raise HTTPException(status_code=404, detail="No video found")
 
-    raw_path = Path(video.filepath)
-    if not raw_path.exists():
-        raise HTTPException(status_code=404, detail="Video file not found on disk")
-
-    return FileResponse(
-        str(raw_path),
-        media_type="video/mp4",
-        headers={"Cache-Control": "no-cache", "Accept-Ranges": "bytes"},
-    )
+    return _stream_video_file(file_path, request)
 
 
-@router.get("/stream/{video_id}/{segment}", summary="Serve an HLS segment file")
-async def get_stream_segment(
-    video_id: str,
-    segment: str,
-) -> FileResponse:
-    """Serve an individual HLS .ts segment or playlist file."""
-    if not (segment.endswith(".ts") or segment.endswith(".m3u8")):
-        raise HTTPException(status_code=400, detail="Invalid segment filename")
-    if "/" in segment or "\\" in segment or ".." in segment:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    seg_path = hls_dir(video_id) / segment
-    if not seg_path.exists():
-        raise HTTPException(status_code=404, detail=f"Segment '{segment}' not found")
-
-    media_type = (
-        "video/mp2t" if segment.endswith(".ts")
-        else "application/vnd.apple.mpegurl"
-    )
-    return FileResponse(
-        str(seg_path),
-        media_type=media_type,
-        headers={"Cache-Control": "max-age=3600"},
-    )
-
-
-@router.get("/stream/{video_id}", summary="Get HLS master playlist (legacy)")
+@router.api_route(
+    "/stream/{video_id}",
+    methods=["GET", "HEAD"],
+    summary="Get stream or video fallback (legacy route)",
+)
 async def get_stream(
     video_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-) -> FileResponse:
-    """Serve the HLS playlist or raw video fallback (legacy route)."""
+):
+    """Serve the annotated MP4 or HLS master playlist."""
+    video = await crud.get_video(db, video_id)
+    file_path = _resolve_stream_file(video_id, video.filepath if video else None)
+    if file_path:
+        return _stream_video_file(file_path, request)
+
     service = StreamingService(db)
     resolved_path = await service.get_playlist_path(video_id)
     return _file_response_for_path(resolved_path)
+
 
 
 @router.get("/frame/{video_id}/{frame_number}", summary="Get a single annotated frame")

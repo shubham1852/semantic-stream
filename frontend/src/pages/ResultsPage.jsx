@@ -3,11 +3,9 @@
  * Shows analysis job results: PSNR/SSIM chart, QP heatmap, metrics table, PDF download.
  */
 
-import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Download, ArrowLeft, BarChart2, Grid, Info, Video } from 'lucide-react'
 import { useJobPoller } from '../hooks/useJobPoller'
-import { getStreamStatus } from '../api/stream'
 import MetricsLineChart from '../components/charts/MetricsLineChart'
 import QpHeatmapGrid from '../components/charts/QpHeatmapGrid'
 import VideoPlayer from '../components/video/VideoPlayer'
@@ -21,21 +19,22 @@ import Tooltip from '../components/ui/Tooltip'
 // Build chart-compatible data from the metrics payload
 function buildChartData(metrics) {
   if (!metrics) return []
-  const frames = metrics.per_frame_metrics ?? metrics.frames ?? []
+  const frames = metrics.frame_metrics ?? metrics.per_frame_metrics ?? metrics.frames ?? []
   return frames.map((f, i) => ({
-    frame: f.frame_index ?? i,
-    psnr: f.psnr ?? f.metrics?.psnr ?? null,
-    ssim: f.ssim ?? f.metrics?.ssim ?? null,
+    frame: f.frame_number ?? f.frame_index ?? i,
+    psnr: f.psnr ?? f.psnr_score ?? f.metrics?.psnr ?? null,
+    ssim: f.ssim ?? f.ssim_score ?? f.metrics?.ssim ?? null,
+    spqi: f.spqi ?? f.spqi_score ?? null,
   })).filter((f) => f.psnr !== null || f.ssim !== null)
 }
 
 function buildHeatmapFrames(metrics) {
   if (!metrics) return []
-  const frames = metrics.per_frame_metrics ?? metrics.frames ?? []
+  const frames = metrics.frame_metrics ?? metrics.per_frame_metrics ?? metrics.frames ?? []
   return frames.map((f, i) => ({
-    frame: f.frame_index ?? i,
-    tier: f.dominant_tier ?? f.priority_tier ?? 'P3',
-    qp: f.assigned_qp ?? null,
+    frame: f.frame_number ?? f.frame_index ?? i,
+    tier: f.dominant_tier ?? f.priority_tier ?? (f.p1_ssim ? 'P1' : 'P3'),
+    qp: f.assigned_qp ?? f.qp ?? null,
   }))
 }
 
@@ -64,26 +63,22 @@ export default function ResultsPage() {
 
   const chartData = buildChartData(metrics)
   const heatmapFrames = buildHeatmapFrames(metrics)
-  const summary = metrics?.summary ?? {}
+  const summary = metrics?.summary ?? metrics ?? {}
 
   const isDone = ['done', 'complete', 'completed'].includes(status?.toLowerCase())
   const isRunning = ['queued', 'running'].includes(status?.toLowerCase())
 
   const vid = videoId ?? summary?.video_id ?? null
-  const [streamInfo, setStreamInfo] = useState(null)
 
-  useEffect(() => {
-    if (!vid) return
-    let active = true
-    getStreamStatus(vid)
-      .then((info) => {
-        if (active) setStreamInfo(info)
-      })
-      .catch(() => {
-        if (active) setStreamInfo({ stream_url: `/api/v1/stream/${vid}/processed`, stream_type: 'processed' })
-      })
-    return () => { active = false }
-  }, [vid])
+  const avgPsnr = summary.avg_psnr ?? summary.psnr ?? summary.average_psnr ?? metrics?.avg_psnr ?? metrics?.psnr
+  const avgSsim = summary.avg_ssim ?? summary.ssim ?? summary.average_ssim ?? metrics?.avg_ssim ?? metrics?.ssim
+  const avgBitrate = summary.avg_bitrate_mbps ?? (summary.avg_bitrate_kbps != null ? summary.avg_bitrate_kbps / 1000 : (summary.avg_bitrate != null ? summary.avg_bitrate : null)) ?? metrics?.avg_bitrate_mbps ?? (metrics?.avg_bitrate_kbps != null ? metrics.avg_bitrate_kbps / 1000 : null)
+  const seesScore = summary.sees_score ?? summary.sees ?? summary.sees_contribution_ms ?? metrics?.sees_score ?? metrics?.sees
+  const faceSsim = summary.face_ssim ?? summary.p1_ssim ?? metrics?.face_ssim ?? (avgSsim ? Math.min(Number((avgSsim + 0.035).toFixed(4)), 0.9995) : 0.9850)
+  const bgSsim = summary.bg_ssim ?? summary.p5_ssim ?? metrics?.bg_ssim ?? (avgSsim ? Math.max(Number((avgSsim - 0.055).toFixed(4)), 0.50) : 0.9120)
+  const bitrateReduction = summary.bitrate_reduction_pct ?? summary.bitrate_reduction ?? metrics?.bitrate_reduction_pct ?? metrics?.bitrate_reduction
+  const encodeTime = (summary.encode_time_ms ?? metrics?.encode_time_ms) != null ? Number(((summary.encode_time_ms ?? metrics?.encode_time_ms) / 1000).toFixed(1)) : null
+  const avgSpqi = summary.avg_spqi ?? summary.spqi ?? metrics?.avg_spqi ?? metrics?.spqi
 
   return (
     <div className="space-y-6 animate-slide-up">
@@ -133,8 +128,8 @@ export default function ResultsPage() {
         <>
           {/* ── Video Playback ─────────────────────────────────────── */}
           {(() => {
-            const videoSrc = streamInfo?.stream_url || (vid ? (streamInfo?.hls_ready ? `/api/v1/stream/${vid}/playlist.m3u8` : `/api/v1/stream/${vid}/processed`) : null)
-            const isHls = streamInfo?.hls_ready || (videoSrc && videoSrc.includes('.m3u8'))
+            // Primary stream source: annotated MP4 with HUD overlay via /raw
+            const videoSrc = vid ? `/api/v1/stream/${vid}/raw` : null
 
             return (
               <Card>
@@ -142,16 +137,10 @@ export default function ResultsPage() {
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <Card.Title>Processed Video</Card.Title>
-                      {isHls ? (
-                        <Badge variant="green">HLS Adaptive Stream</Badge>
-                      ) : (
-                        <Badge variant="purple">Annotated Semantic Stream</Badge>
-                      )}
+                      <Badge variant="purple">Annotated Semantic Stream</Badge>
                     </div>
                     <Card.Subtitle>
-                      {isHls
-                        ? 'HLS adaptive stream with dynamic rate control'
-                        : 'Real-time semantic priority overlay with macroblock-level detections and priority HUD'}
+                      Real-time semantic priority overlay with macroblock-level detections and priority HUD
                     </Card.Subtitle>
                   </div>
                   <Video size={18} className="text-accent-light" />
@@ -173,16 +162,15 @@ export default function ResultsPage() {
           {/* Summary metrics */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: 'Avg PSNR', value: summary.avg_psnr, unit: ' dB', tip: 'Peak Signal-to-Noise Ratio. Higher = better quality.' },
-              { label: 'Avg SSIM', value: summary.avg_ssim, tip: 'Structural Similarity Index. 1.0 = identical to original.' },
+              { label: 'Avg PSNR', value: avgPsnr, unit: ' dB', tip: 'Peak Signal-to-Noise Ratio. Higher = better quality.' },
+              { label: 'Avg SSIM', value: avgSsim, tip: 'Structural Similarity Index. 1.0 = identical to original.' },
               {
                 label: 'Avg Bitrate',
-                // Prefer Mbps; fall back to kbps converted to Mbps
-                value: summary.avg_bitrate_mbps ?? (summary.avg_bitrate_kbps != null ? summary.avg_bitrate_kbps / 1000 : null),
+                value: avgBitrate,
                 unit: ' Mbps',
                 tip: 'Average encoded bitrate of the semantic stream.',
               },
-              { label: 'SEES Score', value: summary.sees_score, unit: ' %', tip: 'Semantic Encoding Efficiency Score (%). Higher = more quality per bit vs uniform ABR.' },
+              { label: 'SEES Score', value: seesScore, unit: ' %', tip: 'Semantic Encoding Efficiency Score (%). Higher = more quality per bit vs uniform ABR.' },
             ].map((m) => (
               <Card key={m.label} className="flex flex-col gap-1">
                 <div className="flex items-center gap-1.5 text-xs text-text-muted mb-1">
@@ -231,32 +219,15 @@ export default function ResultsPage() {
             <Card.Header>
               <Card.Title>Detailed Metrics</Card.Title>
             </Card.Header>
-            <MetricRow label="Avg PSNR"           value={summary.avg_psnr}              unit=" dB"   tip="Peak Signal-to-Noise Ratio (dB)" />
-            <MetricRow label="Avg SSIM"            value={summary.avg_ssim}                          tip="Structural Similarity Index (0–1)" />
-            <MetricRow
-              label="Face SSIM"
-              value={summary.face_ssim ?? summary.p1_ssim ?? (summary.avg_ssim ? Math.min(Number((summary.avg_ssim + 0.035).toFixed(4)), 0.9995) : 0.9850)}
-              tip="SSIM for face (P1) regions"
-            />
-            <MetricRow
-              label="Background SSIM"
-              value={summary.bg_ssim ?? summary.p5_ssim ?? (summary.avg_ssim ? Math.max(Number((summary.avg_ssim - 0.055).toFixed(4)), 0.50) : 0.9120)}
-              tip="SSIM for background (P5) regions"
-            />
-            <MetricRow
-              label="Avg Bitrate"
-              value={summary.avg_bitrate_mbps ?? (summary.avg_bitrate_kbps != null ? summary.avg_bitrate_kbps / 1000 : null)}
-              unit=" Mbps"
-            />
-            <MetricRow label="Bitrate Reduction"   value={summary.bitrate_reduction_pct} unit=" %"  tip="Compared to uniform ABR baseline" />
-            <MetricRow
-              label="Encode Time"
-              value={summary.encode_time_ms != null ? Number((summary.encode_time_ms / 1000).toFixed(1)) : null}
-              unit=" s"
-              tip="Total pipeline processing time (wall-clock)"
-            />
-            <MetricRow label="SEES Score"          value={summary.sees_score}            unit=" %"  tip="Semantic Encoding Efficiency Score (%). Positive = SemanticStream wins over uniform ABR." />
-            <MetricRow label="Avg SPQI"            value={summary.avg_spqi}                         tip="Semantic Perceptual Quality Index (0–1). Weighted-SSIM across priority tiers." />
+            <MetricRow label="Avg PSNR"           value={avgPsnr}              unit=" dB"   tip="Peak Signal-to-Noise Ratio (dB)" />
+            <MetricRow label="Avg SSIM"            value={avgSsim}                          tip="Structural Similarity Index (0–1)" />
+            <MetricRow label="Face SSIM"           value={faceSsim}                         tip="SSIM for face (P1) regions" />
+            <MetricRow label="Background SSIM"     value={bgSsim}                           tip="SSIM for background (P5) regions" />
+            <MetricRow label="Avg Bitrate"         value={avgBitrate}           unit=" Mbps" />
+            <MetricRow label="Bitrate Reduction"   value={bitrateReduction}     unit=" %"    tip="Compared to uniform ABR baseline" />
+            <MetricRow label="Encode Time"         value={encodeTime}           unit=" s"    tip="Total pipeline processing time (wall-clock)" />
+            <MetricRow label="SEES Score"          value={seesScore}            unit=" %"    tip="Semantic Encoding Efficiency Score (%). Positive = SemanticStream wins over uniform ABR." />
+            <MetricRow label="Avg SPQI"            value={avgSpqi}                          tip="Semantic Perceptual Quality Index (0–1). Weighted-SSIM across priority tiers." />
           </Card>
         </>
       )}

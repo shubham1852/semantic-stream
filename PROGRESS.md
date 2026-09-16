@@ -181,10 +181,45 @@
        - Explicit `127.0.0.1:8000` target for API, health, and WebSocket proxies, preventing Windows localhost IPv6 connection delays.
 - [x] **`frontend/src/store/useAppStore.js`** — Default bandwidth profile updated to `broadband`.
 - [x] **`docker-compose.yml` & `RUNBOOK.md`** — Multi-container Docker deployment with health checks and comprehensive operational runbook.
+- [x] **`backend/api/routes/demo.py`** — Multi-prefix demo status endpoint (`/api/v1/demo/status`, `/demo/status`, `/health/demo`) with real-time 5-subsystem health checks (AI engine, SQLite database, FFmpeg binary, Storage, HLS stream directory).
+- [x] **`frontend/scripts/verify_routes.cjs`** — Automated route verification script testing all navigation endpoints and root path resolution (`0.0.0.0` host compatibility).
+- [x] **`frontend/scripts/capture_screenshots.cjs` & `docs/screenshots/`** — Automated documentation screenshot engine capturing 5 full-fidelity application views (`01-dashboard.png` through `05-research.png`).
+- [x] **Production Build & Test Suite Verification** — Vite production build passing with zero runtime errors; 59 of 59 backend pytest unit tests passing.
+
+---
+
+## PHASE 9 — FINAL FIXES & SYSTEM VERIFICATION (2026-09-17) ✅ ALL COMPLETE
+
+- [x] **Fix 1: Video Player Stream Resolution & Playback**
+  - Reordered `analytics_service.py` background runner so `render_annotated_video` completes before job finalization and commit, ensuring the annotated MP4 is ready when frontend detects completion.
+  - Implemented comprehensive fallback hierarchy in `backend/api/routes/stream.py` checking processed folder, subfolder, and storage roots.
+  - Supported full HTTP 206 Partial Content byte-range seeking with `Content-Range`, `Accept-Ranges: bytes`, and CORS headers.
+  - Set `/api/v1/stream/{vid}/raw` as primary stream source in `ResultsPage.jsx` with progressive fallback handling in `VideoPlayer.jsx`.
+- [x] **Fix 2: Live Camera Priority Coverage Score (PCS)**
+  - Replaced misleading 0.00 SPQI in live webcam mode with real-time Priority Coverage Score (PCS) percentage ($P_1+P_2$ coverage).
+  - Ensured `spqi` returns `None` rather than `0.00` in live mode, displaying `—` if absent.
+- [x] **Fix 3: Metric Cards, History & Per-Frame Charts**
+  - Updated `analytics_service.py` `get_job_results` to guarantee `frame_metrics`, `per_frame_metrics`, and summary keys are promoted to top-level and payload root.
+  - Enriched `crud.list_history` query with `avg_ssim`, `avg_psnr`, `avg_bitrate_kbps`, `status`, and `job_id`, resolving Dashboard SSIM calculation.
+  - Enhanced `useJobPoller.js` and `ResultsPage.jsx` metric lookups with complete fallbacks across flat and nested structures.
+- [x] **Fix 4: Heatmap Legend in Live Camera**
+  - Added gradient color scale bar above heatmap canvas (`#0000ff` to `#ff0000`).
+  - Added 3-item color swatch legend below heatmap (P1 Face, P2–P4 Objects, P5 Background).
+- [x] **Fix 5: Scene Label Standardization**
+  - Standardized scene fallback to `GENERAL` in `scene_service.py`, `analytics_service.py`, and `LiveCameraView.jsx`.
+  - Added semantic color-coded scene badge (DIALOGUE green, ACTION red, TITLE CARD cyan, GENERAL slate).
+- [x] **Fix 6: Dual Latency Targets**
+  - Configured dual reference lines on latency chart: GPU target (50ms, red) and CPU target (150ms, cyan).
+  - Updated chart subtitle to reflect GPU vs CPU reference lines.
+- [x] **Fix 7: Visible Compression in Output Video**
+  - Verified and locked 16x16 macroblock downsampling, JPEG Q=15 quantization, background Gaussian blur, and 31x31 Gaussian feathering mask.
 
 ### Current Status
-- Backend: 59 unit tests passing (`backend/tests`)
-- Video Pipeline: End-to-end Upload → YOLO Detection → Semantic Priority Map → Non-Uniform ROI Rendering → HTTP 206 Streaming / HLS
-- Frontend: Responsive Dashboard, Results preview player, Live Camera with HUD & latency tracking, Experiment comparison charts
+- Backend: 59/59 unit tests passing (`backend/tests`) across analytics, detection, and metric utilities.
+- Frontend: `npm run lint` clean (0 errors, 0 warnings); all 14 pages operational.
+- Diagnostics: `/api/v1/demo/status` all green with REAL_ONNX engine loaded.
+- Streaming: HTTP 206 byte-range video streaming confirmed active on `/api/v1/stream/{video_id}/raw`.
+
+
 
 

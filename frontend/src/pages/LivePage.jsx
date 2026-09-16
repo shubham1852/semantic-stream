@@ -154,7 +154,7 @@ export default function LivePage() {
             <div>
               <Card.Title>Processing Latency (ms/frame)</Card.Title>
               <Card.Subtitle>
-                Rolling last {MAX_LATENCY_POINTS} frames · dashed red = 50 ms target
+                Rolling last {MAX_LATENCY_POINTS} frames · red = GPU target · cyan = CPU target
               </Card.Subtitle>
             </div>
             <Activity size={18} className="text-accent-light" />
@@ -185,12 +185,20 @@ export default function LivePage() {
                   formatter={(v) => [`${v} ms`, 'Latency']}
                   labelFormatter={(i) => `Frame ${i}`}
                 />
-                {/* 50 ms target reference line */}
+                {/* 50 ms GPU target reference line */}
                 <ReferenceLine
                   y={50}
                   stroke="#EF4444"
                   strokeDasharray="4 3"
                   strokeOpacity={0.7}
+                  label={{ value: 'GPU target (50ms)', fill: '#EF4444', fontSize: 10, position: 'insideTopRight' }}
+                />
+                {/* 150 ms CPU target reference line */}
+                <ReferenceLine
+                  y={150}
+                  stroke="rgba(34,211,238,0.4)"
+                  strokeDasharray="4 4"
+                  label={{ value: 'CPU target (150ms)', fill: 'rgba(34,211,238,0.8)', fontSize: 10, position: 'insideTopRight' }}
                 />
                 <Line
                   type="monotone"

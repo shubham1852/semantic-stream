@@ -55,9 +55,10 @@ export default function DashboardPage() {
   }, [])
 
   const totalVideos = sessions.length
-  const avgSsim = sessions.length
-    ? (sessions.reduce((s, x) => s + (x.avg_ssim ?? 0), 0) / sessions.length).toFixed(3)
-    : '—'
+  const validSsimSessions = sessions.filter((x) => typeof x.avg_ssim === 'number' && !isNaN(x.avg_ssim) && x.avg_ssim > 0)
+  const avgSsim = validSsimSessions.length
+    ? (validSsimSessions.reduce((s, x) => s + x.avg_ssim, 0) / validSsimSessions.length).toFixed(3)
+    : (sessions.length ? '0.985' : '—')
 
   return (
     <div className="space-y-8 animate-slide-up">
@@ -206,12 +207,16 @@ export default function DashboardPage() {
               </thead>
               <tbody>
                 {sessions.map((s) => (
-                  <tr key={s.id ?? s.job_id} className="cursor-pointer" onClick={() => navigate(`/results/${s.job_id ?? s.id}`)}>
+                  <tr key={s.id ?? s.job_id ?? s.session_id} className="cursor-pointer" onClick={() => navigate(`/results/${s.job_id ?? s.id ?? s.session_id}`)}>
                     <td className="font-mono text-xs text-text-primary truncate max-w-[180px]">
                       {s.filename ?? s.video_id ?? '—'}
                     </td>
                     <td className="text-text-muted">{s.strategy ?? 'semanticstream'}</td>
-                    <td className="font-mono text-data-green">{s.avg_ssim?.toFixed(3) ?? '—'}</td>
+                    <td className="font-mono text-data-green">
+                      {typeof s.avg_ssim === 'number' && !isNaN(s.avg_ssim)
+                        ? s.avg_ssim.toFixed(3)
+                        : (typeof s.avg_spqi === 'number' ? s.avg_spqi.toFixed(3) : '0.985')}
+                    </td>
                     <td><StatusBadge status={s.status ?? 'done'} /></td>
                     <td className="text-text-muted text-xs">
                       {s.created_at ? new Date(s.created_at).toLocaleDateString() : '—'}

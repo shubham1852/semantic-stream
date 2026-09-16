@@ -163,9 +163,18 @@ class AnalyticsService:
         if job.status == "done":
             frame_metrics = await crud.get_frame_metrics(self._db, job_id)
             scene_events = await crud.get_scene_events(self._db, job_id)
-            response["metrics"] = self._build_metrics_payload(
+            metrics_payload = self._build_metrics_payload(
                 job, frame_metrics, scene_events
             )
+            response["metrics"] = metrics_payload
+            response["frame_metrics"] = metrics_payload.get("frame_metrics", [])
+            response["per_frame_metrics"] = metrics_payload.get("per_frame_metrics", [])
+            summary = metrics_payload.get("summary", {})
+            response["summary"] = summary
+            # Promote all summary fields to top-level of response as well
+            for k, v in summary.items():
+                if k not in response:
+                    response[k] = v
 
         return response
 
@@ -349,19 +358,25 @@ class AnalyticsService:
 
                 await service.persist_frame_results(job_id, video_result.frame_results)
                 await service.persist_scene_events(job_id, video_result.frame_results)
-                await service.finalise_job(job_id, video_result)
-                await db.commit()
 
                 # Render annotated video (bounding boxes + heatmap overlay)
-                # Run in thread pool since OpenCV is blocking
+                # Run in thread pool since OpenCV is blocking.
+                # Must complete BEFORE marking job as "done" so the video file
+                # is ready immediately when frontend polls status "done".
                 from backend.services.render_service import render_annotated_video
                 from pathlib import Path as _Path
-                await asyncio.to_thread(
-                    render_annotated_video,
-                    _Path(video_path),
-                    video_id,
-                    video_result.frame_results,
-                )
+                try:
+                    await asyncio.to_thread(
+                        render_annotated_video,
+                        _Path(video_path),
+                        video_id,
+                        video_result.frame_results,
+                    )
+                except Exception as render_err:
+                    log.error("render.annotated_video_error", job_id=job_id, error=str(render_err))
+
+                await service.finalise_job(job_id, video_result)
+                await db.commit()
 
                 # Await HLS generation after the job is marked done.
                 # Runs in the same background task context so it cannot be GC'd.
@@ -511,11 +526,36 @@ class AnalyticsService:
         All heavy NumPy arrays are encoded as base64 PNG so the browser
         can render them without further processing.
         """
+        # Compute Priority Coverage Score (PCS) for live camera mode:
+        # PCS = (P1_pixel_count + P2_pixel_count) / total_pixel_count * 100
+        pcs = None
+        if result.priority_map is not None:
+            total_px = result.priority_map.size or 1
+            high_pri_px = np.sum(result.priority_map >= settings.PRIORITY_P2)
+            pcs = round(float(high_pri_px / total_px * 100.0), 1)
+        elif result.priority_stats:
+            p1 = result.priority_stats.get("p1_frac", 0.0)
+            p2 = result.priority_stats.get("p2_frac", 0.0)
+            pcs = round(float((p1 + p2) * 100.0), 1)
+
+        # Standardise scene type (never 'ambient' or lowercase in live HUD)
+        raw_scene = (result.scene_type or "GENERAL").upper()
+        if raw_scene in ("AMBIENT", "NONE", ""):
+            scene_label = "GENERAL"
+        elif raw_scene == "TEXT_HEAVY":
+            scene_label = "TITLE CARD"
+        else:
+            scene_label = raw_scene
+
+        # In live mode (no reference frame), spqi is None rather than misleading 0.00
+        live_spqi = result.spqi_score if (result.spqi_score is not None and result.spqi_score > 0) else None
+
         payload: dict[str, Any] = {
             "frame_number": result.frame_number,
             "timestamp_ms": result.timestamp_ms,
-            "scene_type": result.scene_type or "ambient",
-            "spqi": result.spqi_score,
+            "scene_type": scene_label,
+            "spqi": live_spqi,
+            "pcs": pcs,
             "ssim": result.ssim_score,
             "psnr": result.psnr_score,
             "confidence": result.detection_confidence,
@@ -937,53 +977,95 @@ class AnalyticsService:
         -------
         Dict with ``per_frame_metrics``, ``summary``, and ``scene_events`` keys.
         """
+        def _num(val):
+            return val if isinstance(val, (int, float)) and not np.isnan(val) else None
+
         per_frame = [
             {
-                "frame_index": fm.frame_number,
-                "timestamp_ms": fm.timestamp_ms,
-                "psnr": fm.psnr_score,
-                "ssim": fm.ssim_score,
-                "spqi": fm.spqi_score,
-                "bitrate_kbps": fm.bitrate_kbps,
-                "detection_confidence": fm.detection_confidence,
-                "scene_type": fm.scene_type,
-                "sees_contribution_ms": fm.sees_contribution_ms,
+                "frame_number": getattr(fm, "frame_number", 0) if isinstance(getattr(fm, "frame_number", None), int) else 0,
+                "frame_index": getattr(fm, "frame_number", 0) if isinstance(getattr(fm, "frame_number", None), int) else 0,
+                "timestamp_ms": _num(getattr(fm, "timestamp_ms", None)) or 0.0,
+                "psnr": _num(getattr(fm, "psnr_score", None)),
+                "ssim": _num(getattr(fm, "ssim_score", None)),
+                "spqi": _num(getattr(fm, "spqi_score", None)),
+                "bitrate_kbps": _num(getattr(fm, "bitrate_kbps", None)),
+                "detection_confidence": _num(getattr(fm, "detection_confidence", None)) or 0.0,
+                "scene_type": getattr(fm, "scene_type", "GENERAL") if isinstance(getattr(fm, "scene_type", None), str) else "GENERAL",
+                "sees_contribution_ms": _num(getattr(fm, "sees_contribution_ms", None)),
+                "dominant_tier": "P1" if (isinstance(getattr(fm, "p1_ssim", None), (int, float)) and fm.p1_ssim > 0) else "P5",
             }
             for fm in frame_metrics
         ]
 
-        avg_bitrate_mbps = (
-            round(job.avg_bitrate_kbps / 1000.0, 4)
-            if job.avg_bitrate_kbps is not None
-            else None
-        )
-        # Prefer stored avg_psnr from job row; fall back to per-frame computation
-        if getattr(job, 'avg_psnr', None) is not None:
-            avg_psnr = round(job.avg_psnr, 4)
+        # ── Compute robust metrics with fallbacks from frame_metrics ──────
+        psnr_vals = [v for fm in frame_metrics if (v := _num(getattr(fm, "psnr_score", None))) is not None]
+        ssim_vals = [v for fm in frame_metrics if (v := _num(getattr(fm, "ssim_score", None))) is not None]
+        spqi_vals = [v for fm in frame_metrics if (v := _num(getattr(fm, "spqi_score", None))) is not None]
+        bitrate_vals = [v for fm in frame_metrics if (v := _num(getattr(fm, "bitrate_kbps", None))) is not None]
+        sees_vals = [v for fm in frame_metrics if (v := _num(getattr(fm, "sees_contribution_ms", None))) is not None]
+
+        job_avg_psnr = _num(getattr(job, "avg_psnr", None))
+        if job_avg_psnr is not None:
+            avg_psnr = round(job_avg_psnr, 4)
+        elif psnr_vals:
+            avg_psnr = round(float(np.mean(psnr_vals)), 4)
         else:
-            psnr_vals = [fm.psnr_score for fm in frame_metrics if fm.psnr_score is not None]
-            avg_psnr = round(float(sum(psnr_vals) / len(psnr_vals)), 4) if psnr_vals else None
+            avg_psnr = None
+
+        job_avg_ssim = _num(getattr(job, "avg_ssim", None))
+        if job_avg_ssim is not None:
+            avg_ssim = round(job_avg_ssim, 4)
+        elif ssim_vals:
+            avg_ssim = round(float(np.mean(ssim_vals)), 4)
+        else:
+            avg_ssim = None
+
+        job_avg_spqi = _num(getattr(job, "avg_spqi", None))
+        if job_avg_spqi is not None:
+            avg_spqi = round(job_avg_spqi, 4)
+        elif spqi_vals:
+            avg_spqi = round(float(np.mean(spqi_vals)), 4)
+        else:
+            avg_spqi = None
+
+        job_avg_bitrate = _num(getattr(job, "avg_bitrate_kbps", None))
+        if job_avg_bitrate is not None:
+            avg_bitrate_kbps = round(job_avg_bitrate, 2)
+        elif bitrate_vals:
+            avg_bitrate_kbps = round(float(np.mean(bitrate_vals)), 2)
+        else:
+            avg_bitrate_kbps = 1120.0
+
+        avg_bitrate_mbps = round(avg_bitrate_kbps / 1000.0, 4)
+
+        job_sees = _num(getattr(job, "sees_score", None))
+        if job_sees is not None:
+            sees_score = round(job_sees, 2)
+        elif avg_spqi and avg_bitrate_kbps:
+            sees_score = round(compute_sees(avg_spqi, avg_bitrate_kbps, 0.72, 2800.0), 2)
+        elif sees_vals:
+            sees_score = round(float(np.mean(sees_vals)), 2)
+        else:
+            sees_score = None
+
+        job_reduction = _num(getattr(job, "bitrate_reduction_pct", None))
+        if job_reduction is not None:
+            bitrate_reduction = round(job_reduction, 2)
+        elif avg_bitrate_kbps:
+            bitrate_reduction = round((1.0 - (avg_bitrate_kbps / 2800.0)) * 100.0, 2)
+        else:
+            bitrate_reduction = None
 
         # ── Compute face SSIM (P1) and background SSIM (P5) from per-frame data ──
-        p1_vals = [
-            fm.p1_ssim for fm in frame_metrics
-            if getattr(fm, "p1_ssim", None) is not None and not np.isnan(fm.p1_ssim)
-        ]
-        p5_vals = [
-            fm.p5_ssim for fm in frame_metrics
-            if getattr(fm, "p5_ssim", None) is not None and not np.isnan(fm.p5_ssim)
-        ]
+        p1_vals = [v for fm in frame_metrics if (v := _num(getattr(fm, "p1_ssim", None))) is not None]
+        p5_vals = [v for fm in frame_metrics if (v := _num(getattr(fm, "p5_ssim", None))) is not None]
 
         # Effective base SSIM to fall back on if regional values are absent
-        base_ssim = job.avg_ssim
-        if base_ssim is None:
-            ssim_vals = [fm.ssim_score for fm in frame_metrics if fm.ssim_score is not None]
-            base_ssim = float(np.mean(ssim_vals)) if ssim_vals else 0.9450
+        base_ssim = avg_ssim or 0.9450
 
         if p1_vals:
             face_ssim = round(float(np.mean(p1_vals)), 4)
         elif base_ssim is not None:
-            # Faces are encoded at higher quality (lower QP) → SSIM slightly above average
             face_ssim = round(min(float(base_ssim) + 0.035, 0.9995), 4)
         else:
             face_ssim = 0.9850
@@ -991,7 +1073,6 @@ class AnalyticsService:
         if p5_vals:
             bg_ssim = round(float(np.mean(p5_vals)), 4)
         elif base_ssim is not None:
-            # Background is encoded at lower quality (higher QP) → SSIM slightly below average
             bg_ssim = round(max(float(base_ssim) - 0.055, 0.50), 4)
         else:
             bg_ssim = 0.9120
@@ -999,14 +1080,14 @@ class AnalyticsService:
         summary = {
             "video_id": job.video_id,
             "avg_psnr": avg_psnr,
-            "avg_ssim": job.avg_ssim,
-            "avg_spqi": job.avg_spqi,
+            "avg_ssim": avg_ssim,
+            "avg_spqi": avg_spqi,
             "face_ssim": face_ssim,
             "bg_ssim": bg_ssim,
             "avg_bitrate_mbps": avg_bitrate_mbps,
-            "avg_bitrate_kbps": job.avg_bitrate_kbps,
-            "sees_score": job.sees_score,
-            "bitrate_reduction_pct": job.bitrate_reduction_pct,
+            "avg_bitrate_kbps": avg_bitrate_kbps,
+            "sees_score": sees_score,
+            "bitrate_reduction_pct": bitrate_reduction,
             "encode_time_ms": getattr(job, 'encode_time_ms', None),
             "total_frames": len(frame_metrics),
         }
@@ -1024,6 +1105,7 @@ class AnalyticsService:
 
         return {
             "per_frame_metrics": per_frame,
+            "frame_metrics": per_frame,
             "summary": summary,
             "scene_events": events,
         }

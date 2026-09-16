@@ -32,9 +32,17 @@ export function useJobPoller(jobId) {
         const data = await getResults(jobId)
         const status = data.status ?? 'running'
         const progressPct = data.progress_percent ?? 0
-        const metrics = data.metrics ?? null
-        // video_id is at the top level of the response envelope
-        const videoId = data.video_id ?? metrics?.summary?.video_id ?? null
+        const rawMetrics = data.metrics ?? {}
+        const summary = data.summary ?? rawMetrics.summary ?? data
+        const frameMetrics = data.frame_metrics ?? data.per_frame_metrics ?? rawMetrics.frame_metrics ?? rawMetrics.per_frame_metrics ?? []
+        const metrics = {
+          ...data,
+          ...rawMetrics,
+          summary,
+          frame_metrics: frameMetrics,
+          per_frame_metrics: frameMetrics,
+        }
+        const videoId = data.video_id ?? summary?.video_id ?? rawMetrics?.summary?.video_id ?? null
 
         setState({ status, progressPct, metrics, videoId, error: null })
 

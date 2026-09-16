@@ -142,11 +142,16 @@ export default function VideoPlayer({ src, poster, className = '', _title = 'Pro
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
         onError={() => {
-          // If processed failed, try raw fallback
-          if (activeSrc && activeSrc.includes('/processed')) {
+          // Attempt fallback URLs:
+          // 1. /raw -> 2. /stream/{videoId} -> 3. HLS -> final fallback
+          if (activeSrc && activeSrc.endsWith('/raw')) {
+            setActiveSrc(activeSrc.replace(/\/raw$/, ''))
+          } else if (activeSrc && activeSrc.includes('/processed')) {
             setActiveSrc(activeSrc.replace('/processed', '/raw'))
+          } else if (activeSrc && !activeSrc.includes('.m3u8')) {
+            setActiveSrc(`${activeSrc}/playlist.m3u8`)
           } else {
-            setLoadError('Unable to load video stream')
+            setLoadError('Video processing in progress')
             setBuffering(false)
           }
         }}
@@ -165,8 +170,8 @@ export default function VideoPlayer({ src, poster, className = '', _title = 'Pro
       {/* Prominent Center Play Button Overlay (when paused and ready) */}
       {!playing && !buffering && !loadError && (
         <div
+          className="absolute inset-0 flex items-center justify-center cursor-pointer pointer-events-auto"
           onClick={togglePlay}
-          className="absolute inset-0 flex items-center justify-center bg-black/25 cursor-pointer transition-all duration-200 hover:bg-black/35"
         >
           <button
             type="button"
@@ -178,17 +183,21 @@ export default function VideoPlayer({ src, poster, className = '', _title = 'Pro
         </div>
       )}
 
-      {/* Error Overlay */}
+      {/* Error or In-Progress Overlay */}
       {loadError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center">
-          <AlertCircle size={32} className="text-data-red" />
+          {loadError.includes('progress') ? (
+            <Spinner size={32} color="#00FF87" />
+          ) : (
+            <AlertCircle size={32} className="text-data-red" />
+          )}
           <p className="text-sm font-medium text-text-primary">{loadError}</p>
           <button
             onClick={handleRetry}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-btn bg-surface-2 hover:bg-surface-3 text-text-primary border border-border transition-colors"
           >
             <RefreshCw size={12} />
-            Retry Playback
+            Check Stream Again
           </button>
         </div>
       )}

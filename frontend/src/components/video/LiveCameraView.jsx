@@ -87,9 +87,20 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
     : null
 
   const detections = lastFrame?.detections ?? []
-  const spqi = lastFrame?.spqi ?? 0
   const latency = lastFrame?.processing_time_ms ?? 0
   const sceneType = lastFrame?.scene_type ?? '—'
+  const priorityCoverage = lastFrame?.pcs != null
+    ? `${Number(lastFrame.pcs).toFixed(1)}%`
+    : (lastFrame?.spqi != null && lastFrame.spqi > 0 ? Number(lastFrame.spqi).toFixed(2) : '—')
+
+  const getSceneColor = (st) => {
+    const s = (st || '').toUpperCase()
+    if (s === 'DIALOGUE') return 'text-green-400'
+    if (s === 'ACTION') return 'text-red-400'
+    if (s === 'TITLE CARD' || s === 'TEXT_HEAVY') return 'text-cyan-400'
+    if (s === 'GENERAL') return 'text-slate-300'
+    return 'text-slate-300'
+  }
 
   return (
     <div className="space-y-4">
@@ -114,8 +125,8 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
           <div className="flex items-center gap-6 text-xs font-mono">
             <div className="flex items-center gap-1.5">
               <Eye size={13} className="text-data-green" />
-              <span className="text-text-muted">SPQI</span>
-              <span className="text-data-green font-medium">{spqi.toFixed ? spqi.toFixed(2) : spqi}</span>
+              <span className="text-text-muted">Priority Coverage</span>
+              <span className="text-data-green font-medium">{priorityCoverage}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <Zap size={13} className="text-data-amber" />
@@ -124,7 +135,9 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-text-muted">Scene</span>
-              <span className="text-data-blue font-medium">{sceneType}</span>
+              <span className={`font-medium ${getSceneColor(sceneType)}`}>
+                {sceneType === 'ambient' ? 'GENERAL' : (sceneType ? sceneType.toUpperCase() : '—')}
+              </span>
             </div>
           </div>
         )}
@@ -161,6 +174,19 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
         {/* Priority heatmap */}
         <div className="space-y-2">
           <p className="text-xs text-text-muted font-mono">🔥 Priority Heatmap</p>
+
+          {/* Gradient scale above heatmap */}
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <span className="text-xs text-slate-500">Low Priority</span>
+            <div
+              className="flex-1 h-2 rounded-full"
+              style={{
+                background: 'linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000)',
+              }}
+            />
+            <span className="text-xs text-slate-500">High Priority</span>
+          </div>
+
           <div
             className="relative rounded-card overflow-hidden bg-black aspect-video flex items-center justify-center"
             style={{ border: '1px solid rgba(0,255,135,0.2)' }}
@@ -176,6 +202,25 @@ export default function LiveCameraView({ onConnectionChange, onFrameReceived }) 
                 {cameraOn ? 'Awaiting frames…' : 'Start camera to see heatmap'}
               </p>
             )}
+          </div>
+
+          {/* Heatmap Color Legend below heatmap */}
+          <div className="mt-3 flex items-center justify-between px-2">
+            <span className="text-xs text-slate-400 font-medium">Priority Legend:</span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: 'rgb(255,0,0)' }} />
+                <span className="text-xs text-slate-300">P1 Face (QP 18)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: 'rgb(255,165,0)' }} />
+                <span className="text-xs text-slate-300">P2–P4 Objects</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: 'rgb(0,0,255)' }} />
+                <span className="text-xs text-slate-300">P5 Background (QP 42)</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
