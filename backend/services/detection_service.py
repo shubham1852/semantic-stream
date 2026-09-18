@@ -1,13 +1,14 @@
+# FILE: backend/services/detection_service.py
 """
 services/detection_service.py
 ==============================
 Full 5-tier semantic priority pipeline for SemanticStream.
 
-This service is the heart of the AI processing pipeline.  It orchestrates
+This service is the heart of the AI processing pipeline. It orchestrates
 the YOLO engine, frame utilities, and QP utilities to produce:
 
   1. A per-frame :class:`FrameAnalysisResult` containing:
-     - YOLO detections (persons, objects)
+     - YOLO detections (persons, animals, vehicles, objects)
      - Text-region coverage fraction
      - Motion coverage fraction and flow field
      - Priority map + QP matrix
@@ -16,21 +17,10 @@ the YOLO engine, frame utilities, and QP utilities to produce:
   2. A :class:`VideoAnalysisResult` — aggregate statistics and per-frame
      records suitable for persisting to the database via CRUD.
 
-Usage
------
-The service is intentionally *synchronous* internally (OpenCV and ONNX are
-blocking) but wrapped for async execution via ``asyncio.to_thread`` in the
-API route handlers.
-
-    from backend.services.detection_service import detection_service
-    result = await asyncio.to_thread(detection_service.analyse_frame, frame, ...)
-
-Design notes
-------------
-* Temporal EMA smoothing of the priority map is maintained via an internal
-  ``_prev_priority_map`` cache keyed by ``job_id``.
-* A ``_prev_gray`` cache per job enables optical-flow computation.
-* Both caches are cleared when a job completes via :meth:`clear_job_state`.
+Phase 10 — Priority Classification System:
+  - PRIORITY_MAP: 40+ COCO classes mapped into priority tiers 1 through 5.
+  - PRIORITY_COLORS_BGR / PRIORITY_COLORS_HEX: Canonical color palettes.
+  - assign_priority(class_name): Standardized priority resolver function.
 """
 
 from __future__ import annotations
@@ -73,6 +63,37 @@ from backend.utils.qp_utils import (
 )
 
 log = get_logger(__name__)
+
+
+# ── Canonical Priority Classification (Phase 10) ─────────────────────────────
+
+PRIORITY_MAP = {
+    "person": 1, "face": 1,
+    "cat": 2, "dog": 2, "bird": 2, "horse": 2, "cow": 2,
+    "sheep": 2, "elephant": 2, "bear": 2, "zebra": 2, "giraffe": 2,
+    "car": 3, "truck": 3, "bus": 3, "motorcycle": 3, "bicycle": 3,
+    "traffic light": 3, "stop sign": 3, "laptop": 3, "cell phone": 3,
+    "tv": 3, "book": 3,
+    "chair": 4, "couch": 4, "bed": 4, "dining table": 4,
+    "bottle": 4, "cup": 4, "bowl": 4, "backpack": 4,
+}
+
+PRIORITY_COLORS_BGR = {
+    1: (80, 255, 0),    # Bright green — P1 humans/faces
+    2: (255, 200, 0),   # Cyan — P2 animals
+    3: (255, 140, 0),   # Orange — P3 vehicles/objects
+    4: (255, 60, 0),    # Red-orange — P4 low priority
+    5: (80, 80, 80),    # Dark gray — P5 background
+}
+
+PRIORITY_COLORS_HEX = {
+    1: "#00FF50", 2: "#00C8FF", 3: "#008CFF", 4: "#003CFF", 5: "#505050"
+}
+
+
+def assign_priority(class_name: str) -> int:
+    """Resolve COCO object class name to priority tier (1=highest, 5=background)."""
+    return PRIORITY_MAP.get(str(class_name).lower().strip(), 5)
 
 
 # ── Result dataclasses ────────────────────────────────────────────────────────
@@ -149,7 +170,7 @@ class DetectionService:
     Thread safety
     -------------
     A single ``DetectionService`` instance is safe to share across async
-    tasks as long as each *job* uses a unique ``job_id``.  The per-job
+    tasks as long as each *job* uses a unique ``job_id``. The per-job
     state (previous priority map, previous grayscale frame) is stored in
     separate dicts keyed by ``job_id`` and never shared.
     """
@@ -184,9 +205,9 @@ class DetectionService:
             per-job temporal state).
         reference_frame:
             An optional uncompressed reference frame for computing SSIM /
-            SPQI.  If ``None``, those metrics are skipped.
+            SPQI. If ``None``, those metrics are skipped.
         confidence_threshold:
-            Override detection confidence threshold.  Defaults to
+            Override detection confidence threshold. Defaults to
             ``settings.CONFIDENCE_THRESHOLD``.
 
         Returns
@@ -210,6 +231,10 @@ class DetectionService:
                     d for d in detections
                     if d.confidence >= confidence_threshold
                 ]
+            for d in detections:
+                # Synchronize priority tier with assign_priority
+                p = assign_priority(d.class_name)
+                d.priority_tier = f"P{p}"
         except Exception as exc:
             log.warning("detection_failed", frame=frame_number, error=str(exc))
             detections = []
@@ -272,8 +297,7 @@ class DetectionService:
 
         # ── 6. Quality metrics ─────────────────────────────────────────
         # reference_frame here is the JPEG-compressed "distorted" signal that
-        # simulates uniform-ABR output.  frame_bgr is the original (reference).
-        # We compare: original (ref) vs JPEG-compressed (distorted).
+        # simulates uniform-ABR output. frame_bgr is the original (reference).
         if reference_frame is not None and result.priority_map is not None:
             try:
                 result.ssim_score = compute_ssim(frame_bgr, reference_frame)
@@ -283,7 +307,7 @@ class DetectionService:
                 )
 
                 # Regional SSIM: P1 (faces/persons)
-                person_dets = [d for d in detections if d.is_person]
+                person_dets = [d for d in detections if d.is_person or assign_priority(d.class_name) == 1]
                 if person_dets:
                     p1_mask = np.zeros((h, w), dtype=bool)
                     for d in person_dets:
@@ -331,29 +355,7 @@ class DetectionService:
         progress_callback=None,
         max_frames: int | None = None,
     ) -> VideoAnalysisResult:
-        """Analyse an entire video file and return aggregate results.
-
-        Parameters
-        ----------
-        video_path:
-            Filesystem path to the source video.
-        job_id / video_id:
-            Database identifiers for progress tracking and storage.
-        sample_rate:
-            Analyse every *N*-th frame.
-        confidence_threshold:
-            YOLO confidence filter.
-        progress_callback:
-            Optional ``callable(progress_pct: float)`` called after each
-            frame to report progress (0–100).
-        max_frames:
-            Cap the number of frames analysed.  If set, ``sample_rate``
-            is automatically increased so the cap is respected.
-
-        Returns
-        -------
-        :class:`VideoAnalysisResult`
-        """
+        """Analyse an entire video file and return aggregate results."""
         video_path = Path(video_path)
         if not video_path.exists():
             raise VideoNotFoundError(str(video_path))
@@ -397,15 +399,10 @@ class DetectionService:
         )
 
         try:
-            import cv2  # already a hard dep via frame_utils
+            import cv2
             for frame_num, ts_ms, frame in extract_frames(
                 video_path, sample_rate=sample_rate
             ):
-                # Simulate uniform-ABR compression at Q=85 so we have a
-                # reference vs distorted pair for PSNR / SSIM / SPQI.
-                # The original frame is the "reference" (high quality);
-                # the JPEG-compressed version represents what a uniform-ABR
-                # baseline encoder produces (the "distorted" signal).
                 try:
                     encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
                     _, jpeg_buf = cv2.imencode(".jpg", frame, encode_params)
@@ -413,7 +410,7 @@ class DetectionService:
                         np.frombuffer(jpeg_buf, dtype=np.uint8), cv2.IMREAD_COLOR
                     )
                 except Exception:
-                    compressed_ref = None  # graceful degradation
+                    compressed_ref = None
 
                 fr = self.analyse_frame(
                     frame_bgr=frame,
@@ -433,7 +430,6 @@ class DetectionService:
                     except Exception:
                         pass
 
-                # Stop if we hit the max_frames cap
                 if max_frames is not None and analysed >= max_frames:
                     log.info("video_analysis_capped", job_id=job_id, frames=analysed)
                     break
@@ -450,13 +446,11 @@ class DetectionService:
         finally:
             self.clear_job_state(job_id)
 
-        # Report 100% complete
         if progress_callback is not None:
             try:
                 progress_callback(100.0)
             except Exception:
                 pass
-
 
         elapsed_s = time.perf_counter() - t_start
 
@@ -505,17 +499,8 @@ class DetectionService:
         text_area_frac: float,
         motion_area_frac: float,
     ) -> str:
-        """Classify the scene into one of the SemanticStream scene types.
-
-        Scene types
-        -----------
-        * ``dialogue``    — persons present, little motion, possibly text
-        * ``action``      — high motion, persons present
-        * ``text_heavy``  — large text region dominates the frame
-        * ``ambient``     — background / static / b-roll
-        * ``mixed``       — multiple tiers active
-        """
-        has_person = any(d.is_person for d in detections)
+        """Classify scene into dialogue, action, text_heavy, motion, or ambient."""
+        has_person = any(d.is_person or assign_priority(d.class_name) == 1 for d in detections)
         text_heavy = text_area_frac >= settings.TEXT_AREA_THRESHOLD
         high_motion = motion_area_frac >= settings.MOTION_DOMINANT_THRESHOLD / 100.0
 

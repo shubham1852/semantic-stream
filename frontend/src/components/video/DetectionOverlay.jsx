@@ -1,18 +1,26 @@
 /**
  * components/video/DetectionOverlay.jsx
- * Renders bounding boxes and priority tier labels on a canvas
+ * Renders bounding boxes, priority tier labels, and QP assignments on a canvas
  * overlaid on top of a video frame.
  */
 
 import { useEffect, useRef } from 'react'
 
-// Color per priority tier — matches heatmap colors
+// Color per priority tier — matches heatmap and research specs
 const TIER_COLORS = {
-  P1: '#00FF87', // bright green — highest priority (face/person)
+  P1: '#00FF87', // bright emerald green — highest priority (face/person)
   P2: '#22D3EE', // cyan — text overlays
   P3: '#F59E0B', // amber — motion
-  P4: '#F97316', // orange — objects
+  P4: '#818CF8', // electric indigo / orange — objects
   P5: '#6B7280', // grey — background
+}
+
+const TIER_QP = {
+  P1: 18,
+  P2: 24,
+  P3: 26,
+  P4: 28,
+  P5: 42,
 }
 
 /**
@@ -49,28 +57,74 @@ export default function DetectionOverlay({ detections = [], width = 640, height 
 
       if (w <= 0 || h <= 0) return
 
-      const tier = (det.priority_tier ?? 'P4').toUpperCase().replace('TIER_', '')
-      const color = TIER_COLORS[tier] || '#F97316'
-      const label = `${det.class_name ?? 'object'} · ${tier} (${Math.round((det.confidence ?? 0) * 100)}%)`
+      const rawTier = (det.priority_tier ?? 'P4').toUpperCase().replace('TIER_', '')
+      const tier = rawTier.startsWith('P') ? rawTier : `P${rawTier}`
+      const color = TIER_COLORS[tier] || '#00FF87'
+      const qp = TIER_QP[tier] || 28
+      const name = (det.class_name ?? 'object').toUpperCase()
+      const conf = Math.round((det.confidence ?? 0) * 100)
+      const label = `${tier} ${name} · QP ${qp} · ${conf}%`
 
-      // Draw colored bounding box
+      // 1. Draw bounding box with subtle corner brackets
+      ctx.save()
       ctx.strokeStyle = color
       ctx.lineWidth = 2
       ctx.strokeRect(x1, y1, w, h)
 
-      // Draw label background pill
-      ctx.font = '11px JetBrains Mono, monospace'
+      // Corner accent brackets (high-tech HUD look)
+      const bracketLen = Math.min(12, Math.min(w, h) / 4)
+      ctx.lineWidth = 3.5
+      // Top-left
+      ctx.beginPath()
+      ctx.moveTo(x1, y1 + bracketLen)
+      ctx.lineTo(x1, y1)
+      ctx.lineTo(x1 + bracketLen, y1)
+      ctx.stroke()
+      // Top-right
+      ctx.beginPath()
+      ctx.moveTo(x1 + w - bracketLen, y1)
+      ctx.lineTo(x1 + w, y1)
+      ctx.lineTo(x1 + w, y1 + bracketLen)
+      ctx.stroke()
+      // Bottom-left
+      ctx.beginPath()
+      ctx.moveTo(x1, y1 + h - bracketLen)
+      ctx.lineTo(x1, y1 + h)
+      ctx.lineTo(x1 + bracketLen, y1 + h)
+      ctx.stroke()
+      // Bottom-right
+      ctx.beginPath()
+      ctx.moveTo(x1 + w - bracketLen, y1 + h)
+      ctx.lineTo(x1 + w, y1 + h)
+      ctx.lineTo(x1 + w, y1 + h - bracketLen)
+      ctx.stroke()
+      ctx.restore()
+
+      // 2. Draw label background pill
+      ctx.font = 'bold 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
       const textMetrics = ctx.measureText(label)
-      const labelW = textMetrics.width + 10
-      const labelH = 20
-      const labelY = Math.max(labelH, y1)
+      const labelW = textMetrics.width + 14
+      const labelH = 22
+      const labelY = Math.max(labelH + 2, y1)
 
+      // Dark background pill with colored border
+      ctx.fillStyle = 'rgba(10, 14, 26, 0.88)'
+      ctx.beginPath()
+      ctx.roundRect(x1, labelY - labelH, labelW, labelH, 4)
+      ctx.fill()
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.2
+      ctx.stroke()
+
+      // Small tier color indicator dot
       ctx.fillStyle = color
-      ctx.fillRect(x1, labelY - labelH, labelW, labelH)
+      ctx.beginPath()
+      ctx.arc(x1 + 8, labelY - labelH / 2, 3.5, 0, 2 * Math.PI)
+      ctx.fill()
 
-      // Draw label text
-      ctx.fillStyle = '#000000'
-      ctx.fillText(label, x1 + 5, labelY - 5)
+      // Label text
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillText(label, x1 + 16, labelY - 7)
     })
   }, [detections, width, height])
 
@@ -83,4 +137,3 @@ export default function DetectionOverlay({ detections = [], width = 640, height 
     />
   )
 }
-

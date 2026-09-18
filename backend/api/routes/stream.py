@@ -231,6 +231,34 @@ async def get_stream_processed(
 
 
 @router.api_route(
+    "/stream/{video_id}/original",
+    methods=["GET", "HEAD"],
+    summary="Serve original uploaded video (MP4 direct playback)",
+)
+async def get_stream_original(
+    video_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Serve the raw original uploaded video directly."""
+    video = await crud.get_video(db, video_id)
+    candidates = []
+    if video and video.filepath:
+        candidates.append(Path(video.filepath))
+        candidates.append(settings.UPLOAD_DIR / Path(video.filepath).name)
+    candidates.append(settings.UPLOAD_DIR / f"{video_id}.mp4")
+    candidates.append(Path("storage") / "uploads" / f"{video_id}.mp4")
+    for c in candidates:
+        if c and c.exists() and c.is_file():
+            return _stream_video_file(c, request)
+    fallback = _resolve_stream_file(video_id, video.filepath if video else None)
+    if fallback and fallback.exists():
+        return _stream_video_file(fallback, request)
+    raise HTTPException(status_code=404, detail="Original video not found")
+
+
+
+@router.api_route(
     "/stream/{video_id}/playlist.m3u8",
     methods=["GET", "HEAD"],
     summary="Get HLS master playlist (canonical)",

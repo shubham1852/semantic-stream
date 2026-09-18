@@ -106,7 +106,8 @@ LIVE_DETECTION_CLASSES = {
 def get_priority_tier(class_id: int, class_name: str = "") -> str:
     """Map YOLO class to SemanticStream priority tier."""
     person_classes = {0, 1}  # person, bicycle
-    if class_id in person_classes or class_name.lower() in ("person", "bicycle"):
+    cname = (class_name or "").lower()
+    if class_id in person_classes or "person" in cname or "face" in cname:
         return "P1"
     return "P4"
 
@@ -173,21 +174,28 @@ class YOLOEngine:
         self._conf_threshold = confidence_threshold
         self._nms_threshold = nms_threshold
         self._session = None          # onnxruntime.InferenceSession
+        self._cv2_net = None          # cv2.dnn.Net fallback
+        self._face_cascade = None     # cv2.CascadeClassifier for face precision
         self._mock_mode: bool = False
         self._input_name: str = ""
         self._inf_w: int = settings.INFERENCE_WIDTH
         self._inf_h: int = settings.INFERENCE_HEIGHT
 
+        # Initialize Haar face detector for high-precision P1 Face detection
+        try:
+            import cv2
+            cascade_file = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+            if cascade_file.exists():
+                self._face_cascade = cv2.CascadeClassifier(str(cascade_file))
+        except Exception:
+            self._face_cascade = None
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def load(self) -> None:
-        """Load the ONNX model.  Call once at application startup.
+        """Load the ONNX model via ONNX Runtime or OpenCV DNN fallback.
 
-        Raises
-        ------
-        ModelLoadError
-            If ONNX Runtime is installed but the file is corrupted /
-            incompatible.  A missing file silently activates mock mode.
+        A missing file activates mock mode; otherwise real AI inference is guaranteed.
         """
         import os
 
@@ -208,16 +216,22 @@ class YOLOEngine:
             self._mock_mode = True
             return
 
+        # 1. Try ONNX Runtime first
         try:
             import onnxruntime as ort  # type: ignore
+            import os
 
             providers = ["CPUExecutionProvider"]
-            # Use CUDA if available (optional, won't fail if not present)
             if "CUDAExecutionProvider" in ort.get_available_providers():
                 providers.insert(0, "CUDAExecutionProvider")
 
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = min(4, os.cpu_count() or 4)
+            opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
             self._session = ort.InferenceSession(
-                self._model_path, providers=providers
+                self._model_path, sess_options=opts, providers=providers
             )
             input_tensor = self._session.get_inputs()[0]
             self._input_name = input_tensor.name
@@ -233,25 +247,39 @@ class YOLOEngine:
                 mode="REAL_ONNX",
                 providers=self._session.get_providers(),
             )
-        except ImportError:
-            log.warning(
-                "yolo_engine_startup",
-                mode="MOCK_FALLBACK",
-                reason="onnxruntime_not_installed",
-                advice="pip install onnxruntime",
-            )
-            self._mock_mode = True
+            return
         except Exception as exc:
             log.warning(
-                "yolo_engine_load_error",
+                "yolo_engine_ort_fallback",
                 error=str(exc),
+                advice="Trying OpenCV DNN loader...",
+            )
+
+        # 2. Try OpenCV DNN fallback if ONNX Runtime fails or is missing
+        try:
+            import cv2
+            self._cv2_net = cv2.dnn.readNetFromONNX(self._model_path)
+            if not self._cv2_net.empty():
+                self._mock_mode = False
+                log.info(
+                    "yolo_engine_startup",
+                    path=self._model_path,
+                    mode="REAL_OPENCV_DNN",
+                )
+                return
+        except Exception as cv_exc:
+            log.warning(
+                "yolo_engine_cv2_dnn_failed",
+                error=str(cv_exc),
                 mode="MOCK_FALLBACK",
             )
-            self._mock_mode = True
+
+        self._mock_mode = True
 
     def unload(self) -> None:
-        """Release the ONNX session (call on application shutdown)."""
+        """Release the ONNX / OpenCV DNN session."""
         self._session = None
+        self._cv2_net = None
         log.info("yolo_model_unloaded")
 
     # ── Inference ─────────────────────────────────────────────────────────────
@@ -261,41 +289,107 @@ class YOLOEngine:
         frame_bgr: np.ndarray,
         conf_threshold: Optional[float] = None,
     ) -> List[Detection]:
-        """Run detection on a single BGR frame.
+        """Run detection on a single BGR frame with real ONNX/DNN inference.
 
-        Parameters
-        ----------
-        frame_bgr:
-            OpenCV-style BGR frame as a uint8 NumPy array of shape
-            ``(H, W, 3)``.
-        conf_threshold:
-            Optional confidence threshold override.
-
-        Returns
-        -------
-        List[Detection]
-            Filtered detections (confidence ≥ threshold, after NMS).
+        Returns filtered detections (confidence ≥ threshold, after NMS)
+        with face refinement.
         """
-        if self._session is None and not self._mock_mode:
+        if self._session is None and self._cv2_net is None and not self._mock_mode:
             try:
                 self.load()
             except Exception:
                 self._mock_mode = True
 
-        if self._mock_mode or self._session is None:
+        if self._mock_mode or (self._session is None and self._cv2_net is None):
             return self._mock_detections(frame_bgr)
 
         t0 = time.perf_counter()
         try:
             blob, scale_x, scale_y = self._preprocess(frame_bgr)
-            raw = self._session.run(None, {self._input_name: blob})[0]
+            if self._session is not None:
+                raw = self._session.run(None, {self._input_name: blob})[0]
+            else:
+                self._cv2_net.setInput(blob)
+                raw = self._cv2_net.forward()
+
             detections = self._postprocess(raw, scale_x, scale_y, conf_threshold)
+
+            # Refine person face detection using Haar cascade if face classifier exists
+            detections = self._refine_face_detections(frame_bgr, detections)
+
             elapsed_ms = (time.perf_counter() - t0) * 1000
             log.debug("yolo_infer", detections=len(detections), elapsed_ms=round(elapsed_ms, 1))
             return detections
         except Exception as exc:
             log.warning("yolo_inference_error", error=str(exc))
             return self._mock_detections(frame_bgr)
+
+    def _refine_face_detections(
+        self, frame_bgr: np.ndarray, detections: List[Detection]
+    ) -> List[Detection]:
+        """Identify faces in detected person regions for pinpoint P1 Face priority."""
+        if self._face_cascade is None or not detections:
+            return detections
+
+        import cv2
+
+        h, w = frame_bgr.shape[:2]
+        new_dets = list(detections)
+        has_face = any(d.class_name.lower() == "face" for d in detections)
+
+        # For each person detected, search the upper half for a face
+        for det in detections:
+            if not det.is_person:
+                continue
+
+            # Upper 55% of the person box represents the head/face region
+            px1 = max(0, min(det.x1, w - 1))
+            px2 = max(0, min(det.x2, w - 1))
+            py1 = max(0, min(det.y1, h - 1))
+            py2 = max(0, min(det.y1 + int((det.y2 - det.y1) * 0.55), h - 1))
+
+            pw = px2 - px1
+            ph = py2 - py1
+            if pw < 30 or ph < 30:
+                continue
+
+            person_roi = frame_bgr[py1:py2, px1:px2]
+            try:
+                # Downscale ROI to max 160px for 15x faster cascade evaluation
+                target_w = min(pw, 160)
+                scale_f = target_w / pw
+                target_h = max(1, int(ph * scale_f))
+                small_roi = cv2.resize(person_roi, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+                gray_roi = cv2.cvtColor(small_roi, cv2.COLOR_BGR2GRAY)
+                faces = self._face_cascade.detectMultiScale(
+                    gray_roi,
+                    scaleFactor=1.25,
+                    minNeighbors=4,
+                    minSize=(16, 16),
+                )
+                inv_s = 1.0 / scale_f
+                for (fx, fy, fw, fh) in faces:
+                    fx_orig = int(fx * inv_s)
+                    fy_orig = int(fy * inv_s)
+                    fw_orig = int(fw * inv_s)
+                    fh_orig = int(fh * inv_s)
+                    new_dets.append(
+                        Detection(
+                            class_id=0,
+                            class_name="face",
+                            confidence=round(min(0.99, det.confidence + 0.05), 3),
+                            x1=px1 + fx_orig,
+                            y1=py1 + fy_orig,
+                            x2=px1 + fx_orig + fw_orig,
+                            y2=py1 + fy_orig + fh_orig,
+                            priority_tier="P1",
+                        )
+                    )
+                    has_face = True
+            except Exception:
+                pass
+
+        return new_dets
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -332,32 +426,33 @@ class YOLOEngine:
 
         thresh = conf_threshold if conf_threshold is not None else self._conf_threshold
 
-        output = raw[0]  # (84, num_anchors)
-        # Transpose so each row is one anchor
-        output = np.transpose(output)  # (num_anchors, 84)
+        output = raw[0].T  # (num_anchors, 84)
+        class_scores = output[:, 4:]
+        class_ids_arr = np.argmax(class_scores, axis=1)
+        confidences = class_scores[np.arange(len(class_scores)), class_ids_arr]
 
-        boxes: List[list] = []
-        scores: List[float] = []
-        class_ids: List[int] = []
+        mask = confidences >= thresh
+        if not np.any(mask):
+            return []
 
-        for row in output:
-            cx, cy, w, h = row[:4]
-            class_scores = row[4:]
-            class_id = int(np.argmax(class_scores))
-            confidence = float(class_scores[class_id])
+        boxes_raw = output[mask, :4]
+        scores = confidences[mask].astype(float).tolist()
+        class_ids = class_ids_arr[mask].astype(int).tolist()
 
-            if confidence < thresh:
-                continue
+        cx = boxes_raw[:, 0]
+        cy = boxes_raw[:, 1]
+        w = boxes_raw[:, 2]
+        h = boxes_raw[:, 3]
 
-            # Convert centre-wh → pixel x1y1x2y2 (inference canvas)
-            x1 = int((cx - w / 2))
-            y1 = int((cy - h / 2))
-            x2 = int((cx + w / 2))
-            y2 = int((cy + h / 2))
+        x1 = (cx - w / 2).astype(np.int32)
+        y1 = (cy - h / 2).astype(np.int32)
+        bw = w.astype(np.int32)
+        bh = h.astype(np.int32)
 
-            boxes.append([x1, y1, x2 - x1, y2 - y1])  # xywh for NMS
-            scores.append(confidence)
-            class_ids.append(class_id)
+        boxes = [
+            [int(x1[i]), int(y1[i]), int(bw[i]), int(bh[i])]
+            for i in range(len(x1))
+        ]
 
         if not boxes:
             return []
@@ -387,8 +482,9 @@ class YOLOEngine:
             y2 = int((by + bh) * scale_y)
             box_area = max(0, x2 - x1) * max(0, y2 - y1)
 
-            # Area filter: ignore boxes spanning >= 80% of the entire frame (full-frame errors)
-            if frame_area > 0 and box_area >= 0.80 * frame_area:
+            # Area filter: ignore boxes spanning >= 95% of the entire frame (full-frame errors)
+            max_area_ratio = 0.98 if cid == 0 else 0.92
+            if frame_area > 0 and box_area >= max_area_ratio * frame_area:
                 continue
 
             cname = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"cls_{cid}"

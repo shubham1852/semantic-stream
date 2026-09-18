@@ -365,12 +365,20 @@ class AnalyticsService:
                 # is ready immediately when frontend polls status "done".
                 from backend.services.render_service import render_annotated_video
                 from pathlib import Path as _Path
+                BW_FACTOR_MAP = {
+                    "strong_wifi": 1.0, "broadband": 0.9, "weak_wifi": 0.6,
+                    "4g_mobile": 0.7, "degrading": 0.4, "burst_loss": 0.5, "stress_test": 0.2
+                }
                 try:
+                    job_obj = await crud.get_job(db, job_id)
+                    bw_profile = getattr(job_obj, "bandwidth_profile", "4g_mobile") if job_obj else "4g_mobile"
+                    bw_factor = BW_FACTOR_MAP.get(bw_profile, 0.7)
                     await asyncio.to_thread(
                         render_annotated_video,
                         _Path(video_path),
                         video_id,
                         video_result.frame_results,
+                        bandwidth_factor=bw_factor,
                     )
                 except Exception as render_err:
                     log.error("render.annotated_video_error", job_id=job_id, error=str(render_err))
