@@ -18,7 +18,7 @@
  *   - Exposes imperative ref with start() and stop() methods.
  */
 
-import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 
 const CAPTURE_FPS = 10
 const FRAME_INTERVAL_MS = 1000 / CAPTURE_FPS // 100ms

@@ -366,13 +366,14 @@ class AnalyticsService:
                 from backend.services.render_service import render_annotated_video
                 from pathlib import Path as _Path
                 BW_FACTOR_MAP = {
-                    "strong_wifi": 1.0, "broadband": 0.9, "weak_wifi": 0.6,
-                    "4g_mobile": 0.7, "degrading": 0.4, "burst_loss": 0.5, "stress_test": 0.2
+                    "strong_wifi": 0.95, "broadband": 0.85, "weak_wifi": 0.45,
+                    "4g_mobile": 0.60, "4g_degrading": 0.50,
+                    "degrading": 0.40, "burst_loss": 0.45, "stress_test": 0.18
                 }
                 try:
                     job_obj = await crud.get_job(db, job_id)
-                    bw_profile = getattr(job_obj, "bandwidth_profile", "4g_mobile") if job_obj else "4g_mobile"
-                    bw_factor = BW_FACTOR_MAP.get(bw_profile, 0.7)
+                    bw_profile = getattr(job_obj, "bandwidth_profile", "broadband") if job_obj else "broadband"
+                    bw_factor = BW_FACTOR_MAP.get(bw_profile, 0.60)
                     await asyncio.to_thread(
                         render_annotated_video,
                         _Path(video_path),

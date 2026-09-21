@@ -2,14 +2,15 @@
 """
 services/render_service.py
 ==========================
-Annotated video renderer for SemanticStream — Phase 10 Visible Compression.
+Annotated video renderer for SemanticStream — Phase 11 Final Demo Polish.
 
 Produces a processed MP4 video demonstrating clear semantic differentiation:
-  1. Background: Aggressively compressed (macroblock downsampling, Gaussian blur,
-     HSV desaturation, and low-quality JPEG quantization).
+  1. Background: Aggressively compressed (blocky pixelation downsampling to 6-14%,
+     Gaussian blur, near-complete HSV desaturation to 5-12% saturation = near greyscale,
+     and JPEG Q=2-6 for maximally visible blocking artefacts).
   2. Semantic ROI: Float32 per-pixel blend mask preserving pristine quality on
-     P1 (100% + 12% padding) and P2 (90%), with partial preservation on P3/P4.
-  3. Priority Overlays: Solid per-tier colored borders, P1 pulsing dots,
+     P1 humans (100% + 14% padding) and P2 animals (88%), with partial preservation on P3/P4.
+  3. Priority Overlays: Solid per-tier colored borders, P1 corner accent marks & dot,
      label pills, and real-time HUD bar.
   4. Compression severity is dynamically controlled by `bandwidth_factor`.
 """
@@ -41,116 +42,132 @@ log = get_logger(__name__)
 def process_frame_with_visible_compression(
     frame: np.ndarray,
     detections: list,
-    bandwidth_factor: float = 1.0,
+    bandwidth_factor: float = 0.7
 ) -> np.ndarray:
-    """Apply visible compression differentiation to a single frame.
+    import cv2
+    import numpy as np
 
-    Aggressively degrades background while preserving full quality for
-    semantic ROIs according to priority tiers (P1-P4).
-    """
     h, w = frame.shape[:2]
 
-    # ── BACKGROUND: aggressively compress ──────────────────────────────
-    scale = max(0.12, 0.22 - 0.10 * (1.0 - bandwidth_factor))
-    small = cv2.resize(
-        frame,
-        (max(1, int(w * scale)), max(1, int(h * scale))),
-        interpolation=cv2.INTER_LINEAR,
-    )
-    bg = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+    # ── STEP 1: CREATE DRAMATICALLY COMPRESSED BACKGROUND ──────────────
+    # Scale factor: lower bandwidth = more aggressive downscale
+    scale = max(0.06, 0.14 - 0.08 * (1.0 - bandwidth_factor))
+    small_w = max(1, int(w * scale))
+    small_h = max(1, int(h * scale))
 
-    blur_k = 13 + int(22 * (1.0 - bandwidth_factor))
+    # Pixelate (blocky macroblock look)
+    small = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+    bg_pixelated = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    # Gaussian blur on top of pixelation (DCT ringing simulation)
+    blur_k = 9 + int(16 * (1.0 - bandwidth_factor))
     blur_k = blur_k if blur_k % 2 == 1 else blur_k + 1
-    bg = cv2.GaussianBlur(bg, (blur_k, blur_k), 0)
+    bg_blurred = cv2.GaussianBlur(bg_pixelated, (blur_k, blur_k), 0)
 
-    hsv = cv2.cvtColor(bg, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hsv[:, :, 1] *= 0.35
-    bg = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    # Desaturate: near-complete desaturation (5-12% saturation = almost greyscale background)
+    bg_hsv = cv2.cvtColor(bg_blurred, cv2.COLOR_BGR2HSV).astype(np.float32)
+    saturation_keep = max(0.05, 0.12 * bandwidth_factor)  # 5-12% saturation = near grey
+    bg_hsv[:, :, 1] *= saturation_keep
+    bg_desaturated = cv2.cvtColor(bg_hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    q = max(4, int(10 * bandwidth_factor))
-    _, enc = cv2.imencode(".jpg", bg, [int(cv2.IMWRITE_JPEG_QUALITY), q])
-    bg = cv2.imdecode(enc, cv2.IMREAD_COLOR)
-    if bg is None:
-        bg = frame.copy()
+    # JPEG quantization (very low quality = visible blocking artefacts)
+    jpeg_q = max(2, int(6 * bandwidth_factor))
+    _, enc = cv2.imencode('.jpg', bg_desaturated,
+                          [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_q])
+    bg_final = cv2.imdecode(enc, cv2.IMREAD_COLOR)
+    if bg_final is None:
+        bg_final = bg_desaturated
 
-    # ── ROI MASK: float32 per-pixel blend weight ────────────────────────
+    # ── STEP 2: BUILD PRECISE ROI MASK ─────────────────────────────────
     roi_mask = np.zeros((h, w), dtype=np.float32)
+
     for det in detections:
-        priority = det.get("priority") or assign_priority(det.get("class", ""))
-        x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
-        x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+        cls = det.get('class', '')
+        priority = det.get('priority') or assign_priority(cls)
+        x1, y1, x2, y2 = [int(v) for v in det['bbox']]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
         if x2 <= x1 or y2 <= y1:
             continue
+
+        # P1: full quality + generous padding
         if priority == 1:
-            px = int((x2 - x1) * 0.12)
-            py = int((y2 - y1) * 0.12)
-            x1, y1 = max(0, x1 - px), max(0, y1 - py)
-            x2, y2 = min(w, x2 + px), min(h, y2 + py)
-            roi_mask[y1:y2, x1:x2] = np.maximum(roi_mask[y1:y2, x1:x2], 1.0)
+            px = int((x2 - x1) * 0.14)
+            py = int((y2 - y1) * 0.14)
+            ex1, ey1 = max(0, x1-px), max(0, y1-py)
+            ex2, ey2 = min(w, x2+px), min(h, y2+py)
+            roi_mask[ey1:ey2, ex1:ex2] = np.maximum(
+                roi_mask[ey1:ey2, ex1:ex2], 1.0)
         elif priority == 2:
-            roi_mask[y1:y2, x1:x2] = np.maximum(roi_mask[y1:y2, x1:x2], 0.90)
+            roi_mask[y1:y2, x1:x2] = np.maximum(
+                roi_mask[y1:y2, x1:x2], 0.88)
         elif priority == 3:
-            roi_mask[y1:y2, x1:x2] = np.maximum(roi_mask[y1:y2, x1:x2], 0.55)
+            roi_mask[y1:y2, x1:x2] = np.maximum(
+                roi_mask[y1:y2, x1:x2], 0.50)
         elif priority == 4:
-            roi_mask[y1:y2, x1:x2] = np.maximum(roi_mask[y1:y2, x1:x2], 0.25)
+            roi_mask[y1:y2, x1:x2] = np.maximum(
+                roi_mask[y1:y2, x1:x2], 0.20)
 
-    # Feather mask edges
-    roi_mask = cv2.GaussianBlur(roi_mask, (71, 71), 25)
-    roi_3 = np.stack([roi_mask] * 3, axis=-1)
+    # ── STEP 3: FEATHER MASK EDGES ─────────────────────────────────────
+    # Large kernel feather for seamless blend — no hard edges
+    roi_feathered = cv2.GaussianBlur(roi_mask, (81, 81), 28)
+    roi_3ch = np.stack([roi_feathered] * 3, axis=-1)
 
-    # ── COMPOSITE ──────────────────────────────────────────────────────
-    result = (
-        frame.astype(np.float32) * roi_3
-        + bg.astype(np.float32) * (1.0 - roi_3)
-    )
-    result = np.clip(result, 0, 255).astype(np.uint8)
+    # ── STEP 4: COMPOSITE ──────────────────────────────────────────────
+    orig_f = frame.astype(np.float32)
+    comp_f = bg_final.astype(np.float32)
+    result_f = orig_f * roi_3ch + comp_f * (1.0 - roi_3ch)
+    result = np.clip(result_f, 0, 255).astype(np.uint8)
 
-    # ── DRAW PRIORITY BORDERS + LABELS ────────────────────────────────
+    # ── STEP 5: DRAW BORDERS + LABELS ON COMPOSITED RESULT ─────────────
     overlay = result.copy()
-    for det in sorted(detections, key=lambda d: d.get("priority", 5)):
-        priority = det.get("priority") or assign_priority(det.get("class", ""))
+    for det in sorted(detections, key=lambda d: d.get('priority', 5)):
+        priority = det.get('priority') or assign_priority(det.get('class', ''))
         if priority >= 5:
             continue
         color = PRIORITY_COLORS_BGR.get(priority, (80, 80, 80))
-        x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
-        x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w - 1, x2), min(h - 1, y2)
+        x1, y1, x2, y2 = [int(v) for v in det['bbox']]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w-1, x2), min(h-1, y2)
+        if x2 <= x1 or y2 <= y1:
+            continue
+
         thick = 3 if priority == 1 else (2 if priority == 2 else 1)
         cv2.rectangle(overlay, (x1, y1), (x2, y2), color, thick)
-        if priority == 1:
-            cx = (x1 + x2) // 2
-            cv2.circle(overlay, (cx, y1), 8, (80, 255, 0), -1)
-            cv2.circle(overlay, (cx, y1), 8, (255, 255, 255), 1)
-        label = f"{det.get('class', 'obj')} P{priority}"
-        lsz = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)[0]
-        cv2.rectangle(overlay, (x1, y1 - lsz[1] - 7), (x1 + lsz[0] + 5, y1), color, -1)
-        cv2.putText(
-            overlay,
-            label,
-            (x1 + 2, y1 - 3),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.44,
-            (255, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
-    result = cv2.addWeighted(result, 0.7, overlay, 0.3, 0)
 
-    # ── HUD ───────────────────────────────────────────────────────────
+        # Corner accent marks for P1
+        if priority == 1:
+            corner_len = min(18, (x2-x1)//5, (y2-y1)//5)
+            for cx, cy, dx, dy in [
+                (x1, y1, 1, 1), (x2, y1, -1, 1),
+                (x1, y2, 1, -1), (x2, y2, -1, -1)
+            ]:
+                cv2.line(overlay, (cx, cy), (cx + dx*corner_len, cy), color, 3)
+                cv2.line(overlay, (cx, cy), (cx, cy + dy*corner_len), color, 3)
+            cx_dot = (x1 + x2) // 2
+            cv2.circle(overlay, (cx_dot, y1), 8, (80, 255, 0), -1)
+            cv2.circle(overlay, (cx_dot, y1), 8, (255, 255, 255), 2)
+
+        label = f"{det.get('class', 'obj')} P{priority}"
+        lsz, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
+        pill_y1 = max(0, y1 - lsz[1] - 7)
+        cv2.rectangle(overlay, (x1, pill_y1), (x1+lsz[0]+5, y1), color, -1)
+        cv2.putText(overlay, label, (x1+2, y1-3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+
+    result = cv2.addWeighted(result, 0.72, overlay, 0.28, 0)
+
+    # ── STEP 6: HUD ────────────────────────────────────────────────────
     hud = result.copy()
-    cv2.rectangle(hud, (0, 0), (w, 28), (8, 8, 18), -1)
-    p1c = sum(1 for d in detections if d.get("priority") == 1)
-    bw_pct = int(bandwidth_factor * 100)
-    cv2.putText(
-        hud,
-        f"SEMANTICSTREAM | humans(P1):{p1c} | BG compressed {100 - bw_pct}% | semantic ROI preserved",
-        (8, 19),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.42,
-        (0, 255, 80),
-        1,
-        cv2.LINE_AA,
-    )
-    result = cv2.addWeighted(result, 0.15, hud, 0.85, 0)
+    cv2.rectangle(hud, (0, 0), (w, 30), (6, 6, 16), -1)
+    p1c = sum(1 for d in detections if d.get('priority') == 1)
+    p2c = sum(1 for d in detections if d.get('priority') == 2)
+    bw_pct = int((1.0 - bandwidth_factor) * 100)
+    hud_txt = (f"SEMANTICSTREAM  |  humans(P1):{p1c}  animals(P2):{p2c}"
+               f"  |  BG compressed {bw_pct}%  |  semantic ROI preserved")
+    cv2.putText(hud, hud_txt, (8, 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 80), 1, cv2.LINE_AA)
+    result = cv2.addWeighted(result, 0.10, hud, 0.90, 0)
 
     return result
 

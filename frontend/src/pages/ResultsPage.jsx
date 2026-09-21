@@ -3,19 +3,19 @@
  * pages/ResultsPage.jsx
  * ======================
  * Analysis job results with Phase 10 Visible Compression Upgrades:
- *   1. Split View Video Player: Original | Processed | Split (canvas side-by-side with divider & labels)
+ *   1. Synchronized Split View Video Player: Original | Processed | Split (canvas side-by-side with divider & labels)
  *   2. Compression Visibility Metric Card:
- *        - Background Compression: Severe (macroblock + blur + JPEG Q≈{q})
+ *        - Background Compression: Macroblock + blur {blurPx}px + JPEG Q={jpegQ}
  *        - ROI Preservation: 100% — P1 humans at original quality
- *        - Bandwidth Saved: {((original_size - processed_size)/original_size*100).toFixed(1)}%
- *        - Visual Diff Score: {(bg_ssim_degradation / roi_ssim_preservation).toFixed(2)}x
+ *        - Bandwidth Saved: {bwSaved}%
+ *        - Visual Diff Score: {diffScore}×
  *   3. Summary Metrics: PSNR, SSIM, Bitrate, SEES score.
  *   4. Semantic Clarity Highlight (Face SSIM vs Background SSIM delta).
  *   5. Frame-by-frame PSNR/SSIM/SPQI chart and QP Heatmap grid.
  *   6. Comprehensive Metrics Breakdown table and PDF Report Download.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Download,
@@ -27,9 +27,7 @@ import {
   Shield,
   Eye,
   TrendingDown,
-  Zap,
   Cpu,
-  Layers,
   Columns,
   Play,
   Pause,
@@ -41,19 +39,9 @@ import QpHeatmapGrid from '../components/charts/QpHeatmapGrid'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import ProgressBar from '../components/ui/ProgressBar'
-import Badge, { StatusBadge } from '../components/ui/Badge'
+import { StatusBadge } from '../components/ui/Badge'
 import Spinner from '../components/ui/Spinner'
 import Tooltip from '../components/ui/Tooltip'
-
-const BW_FACTOR_MAP = {
-  strong_wifi: 1.0,
-  broadband: 0.9,
-  weak_wifi: 0.6,
-  '4g_mobile': 0.7,
-  degrading: 0.4,
-  burst_loss: 0.5,
-  stress_test: 0.2,
-}
 
 // Build chart-compatible data from the metrics payload
 function buildChartData(metrics) {
@@ -141,72 +129,66 @@ export default function ResultsPage() {
 
   const vid = videoId ?? summary?.video_id ?? null
 
-  // ── Video Mode State (Original | Processed | Split) ────────────────────────
-  const [videoMode, setVideoMode] = useState('processed') // 'original' | 'processed' | 'split'
+  // ── FIX 5a: Video Mode State (Original | Processed | Split) ────────────────
+  const [viewMode, setViewMode] = useState('processed') // 'original' | 'processed' | 'split'
   const [isPlaying, setIsPlaying] = useState(false)
 
+  const splitCanvasRef = useRef(null)
   const origVideoRef = useRef(null)
   const procVideoRef = useRef(null)
-  const splitCanvasRef = useRef(null)
-  const animFrameIdRef = useRef(null)
 
   const originalSrc = vid ? `/api/v1/stream/${vid}/original` : null
   const processedSrc = vid ? `/api/v1/stream/${vid}/processed` : null
 
-  // ── Synchronized Split Canvas Rendering ────────────────────────────────────
-  const drawSplitFrame = useCallback(() => {
+  // ── FIX 5a: Synchronized Split View Drawing Loop ───────────────────────────
+  const drawSplitView = useCallback(() => {
+    const canvas = splitCanvasRef.current
     const orig = origVideoRef.current
     const proc = procVideoRef.current
-    const canvas = splitCanvasRef.current
+    if (!canvas || !orig || !proc) return
+    const ctx = canvas.getContext('2d')
+    const w = canvas.width
+    const h = canvas.height
+    const half = Math.floor(w / 2)
 
-    if (canvas && proc && orig && proc.readyState >= 2 && orig.readyState >= 2) {
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        const w = canvas.width || 640
-        const h = canvas.height || 360
-        const halfW = Math.floor(w / 2)
+    // Left half: original
+    ctx.drawImage(orig, 0, 0, half, h, 0, 0, half, h)
+    // Right half: processed
+    ctx.drawImage(proc, half, 0, w - half, h, half, 0, w - half, h)
 
-        // Draw left half from original video
-        const ow = orig.videoWidth || w
-        const oh = orig.videoHeight || h
-        ctx.drawImage(orig, 0, 0, ow / 2, oh, 0, 0, halfW, h)
+    // Divider line
+    ctx.strokeStyle = '#FFFFFF'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(half, 0)
+    ctx.lineTo(half, h)
+    ctx.stroke()
 
-        // Draw right half from processed video
-        const pw = proc.videoWidth || w
-        const ph = proc.videoHeight || h
-        ctx.drawImage(proc, pw / 2, 0, pw / 2, ph, halfW, 0, w - halfW, h)
+    // Labels
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.fillRect(4, 4, 80, 22)
+    ctx.fillRect(half + 4, 4, 160, 22)
+    ctx.fillStyle = '#FFFFFF'
+    ctx.font = 'bold 11px sans-serif'
+    ctx.fillText('ORIGINAL', 8, 19)
+    ctx.fillStyle = '#00FF50'
+    ctx.fillText('SEMANTIC COMPRESSED', half + 8, 19)
 
-        // White 2px vertical line divider at center
-        ctx.fillStyle = '#FFFFFF'
-        ctx.fillRect(halfW - 1, 0, 2, h)
+    if (viewMode === 'split') requestAnimationFrame(drawSplitView)
+  }, [viewMode])
 
-        // Text labels 20px from top
-        ctx.font = 'bold 13px ui-monospace, SFMono-Regular, monospace'
-        ctx.fillStyle = '#FFFFFF'
-        ctx.fillText('ORIGINAL', 20, 24)
-
-        ctx.fillStyle = '#00FF50'
-        ctx.fillText('SEMANTIC COMPRESSED', halfW + 20, 24)
-      }
-    }
-
-    if (videoMode === 'split' && isPlaying) {
-      animFrameIdRef.current = requestAnimationFrame(drawSplitFrame)
-    }
-  }, [videoMode, isPlaying])
-
+  // Start/stop split view loop
   useEffect(() => {
-    if (videoMode === 'split') {
-      animFrameIdRef.current = requestAnimationFrame(drawSplitFrame)
+    if (viewMode === 'split') {
+      // Sync processed video time to original
+      const orig = origVideoRef.current
+      const proc = procVideoRef.current
+      if (orig && proc) proc.currentTime = orig.currentTime
+      requestAnimationFrame(drawSplitView)
     }
-    return () => {
-      if (animFrameIdRef.current) {
-        cancelAnimationFrame(animFrameIdRef.current)
-      }
-    }
-  }, [videoMode, drawSplitFrame])
+  }, [viewMode, drawSplitView])
 
-  // Sync videos when in split mode
+  // Play/pause controls for split view
   const handleSplitPlayPause = () => {
     const orig = origVideoRef.current
     const proc = procVideoRef.current
@@ -217,7 +199,7 @@ export default function ResultsPage() {
       proc.pause()
       setIsPlaying(false)
     } else {
-      orig.currentTime = proc.currentTime
+      proc.currentTime = orig.currentTime
       Promise.all([orig.play().catch(() => {}), proc.play().catch(() => {})]).then(() => {
         setIsPlaying(true)
       })
@@ -228,73 +210,74 @@ export default function ResultsPage() {
     const time = Number(e.target.value)
     if (origVideoRef.current) origVideoRef.current.currentTime = time
     if (procVideoRef.current) procVideoRef.current.currentTime = time
-    requestAnimationFrame(drawSplitFrame)
+    requestAnimationFrame(drawSplitView)
   }
 
   // ── Metrics Calculation ───────────────────────────────────────────────────
+  const results = summary || metrics || {}
+
   const avgPsnr =
-    summary.avg_psnr ??
-    summary.psnr ??
-    summary.average_psnr ??
+    results.avg_psnr ??
+    results.psnr ??
+    results.average_psnr ??
     metrics?.avg_psnr ??
     metrics?.psnr
   const avgSsim =
-    summary.avg_ssim ??
-    summary.ssim ??
-    summary.average_ssim ??
+    results.avg_ssim ??
+    results.ssim ??
+    results.average_ssim ??
     metrics?.avg_ssim ??
     metrics?.ssim
   const avgBitrate =
-    summary.avg_bitrate_mbps ??
-    (summary.avg_bitrate_kbps != null ? summary.avg_bitrate_kbps / 1000 : null) ??
-    summary.avg_bitrate ??
+    results.avg_bitrate_mbps ??
+    (results.avg_bitrate_kbps != null ? results.avg_bitrate_kbps / 1000 : null) ??
+    results.avg_bitrate ??
     metrics?.avg_bitrate_mbps ??
     (metrics?.avg_bitrate_kbps != null ? metrics.avg_bitrate_kbps / 1000 : null)
   const seesScore =
-    summary.sees_score ?? summary.sees ?? metrics?.sees_score ?? metrics?.sees
+    results.sees_score ?? results.sees ?? metrics?.sees_score ?? metrics?.sees
   const faceSsim =
-    summary.face_ssim ??
-    summary.p1_ssim ??
+    results.face_ssim ??
+    results.p1_ssim ??
     metrics?.face_ssim ??
     (avgSsim ? Math.min(Number((avgSsim + 0.035).toFixed(4)), 0.9995) : 0.985)
   const bgSsim =
-    summary.bg_ssim ??
-    summary.background_ssim ??
-    summary.p5_ssim ??
+    results.bg_ssim ??
+    results.background_ssim ??
+    results.p5_ssim ??
     metrics?.bg_ssim ??
     (avgSsim ? Math.max(Number((avgSsim - 0.055).toFixed(4)), 0.5) : 0.912)
   const bitrateReduction =
-    summary.bitrate_reduction_pct ??
-    summary.bitrate_reduction ??
+    results.bitrate_reduction_pct ??
+    results.bitrate_reduction ??
     metrics?.bitrate_reduction_pct ??
     metrics?.bitrate_reduction
   const encodeTime =
-    (summary.encode_time_ms ?? metrics?.encode_time_ms) != null
-      ? Number(((summary.encode_time_ms ?? metrics?.encode_time_ms) / 1000).toFixed(1))
+    (results.encode_time_ms ?? metrics?.encode_time_ms) != null
+      ? Number(((results.encode_time_ms ?? metrics?.encode_time_ms) / 1000).toFixed(1))
       : null
   const avgSpqi =
-    summary.avg_spqi ?? summary.spqi ?? metrics?.avg_spqi ?? metrics?.spqi
+    results.avg_spqi ?? results.spqi ?? metrics?.avg_spqi ?? metrics?.spqi
 
-  // Compression Visibility formulas (Thing 2)
-  const bwProfile = summary.bandwidth_profile || '4g_mobile'
-  const bandwidth_factor = BW_FACTOR_MAP[bwProfile] ?? 0.7
-  const q = Math.round(10 * bandwidth_factor)
-  const bg_ssim_degradation = 1 - (bgSsim || 0.4)
-  const roi_ssim_preservation = faceSsim || avgSsim || 0.92
-  const visual_diff_score = (bg_ssim_degradation / roi_ssim_preservation).toFixed(2)
-
-  const original_size =
-    summary.original_file_size || summary.original_size || 10485760 // 10 MB fallback
-  const processed_size =
-    summary.processed_file_size ||
-    summary.processed_size ||
-    Math.round(
-      original_size * (1 - (bitrateReduction ? Number(bitrateReduction) / 100 : 0.485))
-    )
-  const bandwidth_saved_pct = (
-    ((original_size - processed_size) / original_size) *
-    100
-  ).toFixed(1)
+  // ── FIX 5b: Compression Visibility Values ─────────────────────────────────
+  const bwProfileMap = {
+    strong_wifi: 0.95,
+    broadband: 0.85,
+    weak_wifi: 0.45,
+    '4g_mobile': 0.60,
+    degrading: 0.40,
+    burst_loss: 0.45,
+    stress_test: 0.18,
+  }
+  const bwFactor = bwProfileMap[results?.bandwidth_profile] ?? 0.60
+  const jpegQ = Math.max(3, Math.round(8 * bwFactor))
+  const blurPx = Math.round(9 + 16 * (1 - bwFactor))
+  const origSize = results?.original_size_bytes || 1
+  const procSize = results?.processed_size_bytes || origSize
+  const bwSaved = (((origSize - procSize) / origSize) * 100).toFixed(1)
+  const bgSSIM = results?.background_ssim ?? 0.38
+  const roiSSIM = results?.face_ssim ?? results?.avg_ssim ?? 0.94
+  const diffScore = (roiSSIM / Math.max(bgSSIM, 0.01)).toFixed(2)
 
   // Semantic clarity delta
   const ssimDelta =
@@ -351,7 +334,7 @@ export default function ResultsPage() {
 
       {isDone && (
         <>
-          {/* ── Thing 1: Video Player with Split View Toggle ────────────────── */}
+          {/* ── FIX 5a: Video Player with Split View Toggle ─────────────────── */}
           <Card className="overflow-hidden border border-slate-800 bg-[#0F1420]">
             <div className="p-4 border-b border-slate-800/80 flex items-center justify-between flex-wrap gap-3">
               <div>
@@ -362,7 +345,7 @@ export default function ResultsPage() {
                   </h3>
                 </div>
                 <p className="text-xs text-text-muted">
-                  Toggle between the original stream, semantic compressed stream, and side-by-side split view
+                  Toggle between original stream, semantic compressed stream, and synchronized split view
                 </p>
               </div>
 
@@ -371,11 +354,11 @@ export default function ResultsPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setVideoMode('original')
+                    setViewMode('original')
                     setIsPlaying(false)
                   }}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
-                    videoMode === 'original'
+                    viewMode === 'original'
                       ? 'bg-accent text-white shadow-sm'
                       : 'text-text-muted hover:text-text-primary'
                   }`}
@@ -385,11 +368,11 @@ export default function ResultsPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setVideoMode('processed')
+                    setViewMode('processed')
                     setIsPlaying(false)
                   }}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
-                    videoMode === 'processed'
+                    viewMode === 'processed'
                       ? 'bg-[#00FF50] text-black font-bold shadow-sm'
                       : 'text-text-muted hover:text-text-primary'
                   }`}
@@ -399,11 +382,11 @@ export default function ResultsPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setVideoMode('split')
+                    setViewMode('split')
                     setIsPlaying(false)
                   }}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
-                    videoMode === 'split'
+                    viewMode === 'split'
                       ? 'bg-[#00C8FF] text-black font-bold shadow-sm'
                       : 'text-text-muted hover:text-text-primary'
                   }`}
@@ -417,7 +400,7 @@ export default function ResultsPage() {
             {/* Video / Canvas Viewport */}
             <div className="relative aspect-video bg-black flex items-center justify-center">
               {/* Original Mode */}
-              {videoMode === 'original' && (
+              {viewMode === 'original' && (
                 <video
                   key="video-original"
                   src={originalSrc || processedSrc}
@@ -427,7 +410,7 @@ export default function ResultsPage() {
               )}
 
               {/* Processed Mode */}
-              {videoMode === 'processed' && (
+              {viewMode === 'processed' && (
                 <video
                   key="video-processed"
                   src={processedSrc}
@@ -437,7 +420,7 @@ export default function ResultsPage() {
               )}
 
               {/* Split Mode (Canvas with synchronized hidden videos) */}
-              {videoMode === 'split' && (
+              {viewMode === 'split' && (
                 <div className="relative w-full h-full flex flex-col justify-center items-center bg-black">
                   <canvas
                     ref={splitCanvasRef}
@@ -446,22 +429,22 @@ export default function ResultsPage() {
                     className="w-full h-full object-contain"
                   />
 
-                  {/* Hidden synchronization videos */}
+                  {/* Hidden synchronization video tags */}
                   <video
                     ref={origVideoRef}
                     src={originalSrc || processedSrc}
                     playsInline
                     muted
-                    style={{ display: 'none' }}
+                    style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, zIndex: -1 }}
                   />
                   <video
                     ref={procVideoRef}
                     src={processedSrc}
                     playsInline
                     muted
-                    onTimeUpdate={drawSplitFrame}
+                    onTimeUpdate={drawSplitView}
                     onEnded={() => setIsPlaying(false)}
-                    style={{ display: 'none' }}
+                    style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, zIndex: -1 }}
                   />
 
                   {/* Synchronized playback controls bar for Split view */}
@@ -479,7 +462,7 @@ export default function ResultsPage() {
                       onClick={() => {
                         if (origVideoRef.current) origVideoRef.current.currentTime = 0
                         if (procVideoRef.current) procVideoRef.current.currentTime = 0
-                        requestAnimationFrame(drawSplitFrame)
+                        requestAnimationFrame(drawSplitView)
                       }}
                       className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white"
                       aria-label="Restart"
@@ -540,55 +523,41 @@ export default function ResultsPage() {
             />
           </div>
 
-          {/* ── Thing 2: Compression Visibility Metric Card ────────────────── */}
-          <Card className="p-5 border border-slate-800 bg-[#111625]">
-            <Card.Header>
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <Layers size={18} className="text-[#00FF50]" />
-                  <Card.Title>Compression Visibility</Card.Title>
-                  <Badge variant="green">Phase 10 Verified</Badge>
+          {/* ── FIX 5b: Compression Visibility Metric Card ─────────────────── */}
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+            <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+              <span className="text-green-400">◈</span> Compression Visibility
+            </h3>
+            <div className="space-y-2">
+              {[
+                {
+                  label: 'Background Compression',
+                  value: `Macroblock + blur ${blurPx}px + JPEG Q=${jpegQ}`,
+                  color: 'text-red-400',
+                },
+                {
+                  label: 'ROI Preservation',
+                  value: '100% — P1 humans at original quality',
+                  color: 'text-green-400',
+                },
+                {
+                  label: 'Bandwidth Saved',
+                  value: `${bwSaved}%`,
+                  color: parseFloat(bwSaved) > 30 ? 'text-green-400' : 'text-yellow-400',
+                },
+                {
+                  label: 'Visual Diff Score',
+                  value: `${diffScore}× (ROI vs background quality ratio)`,
+                  color: 'text-blue-400',
+                },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="flex justify-between items-center text-xs">
+                  <span className="text-gray-500">{label}</span>
+                  <span className={`font-medium ${color}`}>{value}</span>
                 </div>
-                <Card.Subtitle>
-                  Demonstrates spatial quality differentiation between semantic ROIs and compressed background
-                </Card.Subtitle>
-              </div>
-            </Card.Header>
-
-            <div className="mt-4 divide-y divide-slate-800/80 border-t border-b border-slate-800/80">
-              {/* Row 1 */}
-              <div className="flex items-center justify-between py-3">
-                <span className="text-sm text-text-muted font-medium">Background Compression</span>
-                <span className="font-mono text-sm font-semibold text-[#00C8FF]">
-                  Severe (macroblock + blur + JPEG Q≈{q})
-                </span>
-              </div>
-
-              {/* Row 2 */}
-              <div className="flex items-center justify-between py-3">
-                <span className="text-sm text-text-muted font-medium">ROI Preservation</span>
-                <span className="font-mono text-sm font-semibold text-[#00FF50]">
-                  100% — P1 humans at original quality
-                </span>
-              </div>
-
-              {/* Row 3 */}
-              <div className="flex items-center justify-between py-3">
-                <span className="text-sm text-text-muted font-medium">Bandwidth Saved</span>
-                <span className="font-mono text-sm font-bold text-[#00FF50]">
-                  {bandwidth_saved_pct}%
-                </span>
-              </div>
-
-              {/* Row 4 */}
-              <div className="flex items-center justify-between py-3">
-                <span className="text-sm text-text-muted font-medium">Visual Diff Score</span>
-                <span className="font-mono text-sm font-bold text-[#F59E0B]">
-                  {visual_diff_score}x
-                </span>
-              </div>
+              ))}
             </div>
-          </Card>
+          </div>
 
           {/* ── Semantic Clarity Highlight ─────────────────────────────────── */}
           {ssimDelta != null && (
@@ -696,7 +665,7 @@ export default function ResultsPage() {
               />
               <MetricRow label="Average Bitrate" value={avgBitrate} unit=" Mbps" />
               <MetricRow label="Processing / Encoding Time" value={encodeTime} unit=" s" />
-              <MetricRow label="Bandwidth Profile" value={bwProfile} />
+              <MetricRow label="Bandwidth Profile" value={results.bandwidth_profile || 'broadband'} />
             </div>
           </Card>
         </>
