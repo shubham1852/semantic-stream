@@ -6,7 +6,6 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { FileText, Download, Eye, RefreshCw, AlertCircle, Calendar, Film } from 'lucide-react'
-import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import { StatusBadge } from '../components/ui/Badge'
@@ -114,7 +113,7 @@ export default function ReportsPage() {
   }, [])
 
   return (
-    <PageShell>
+    <>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -252,6 +251,6 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>
-    </PageShell>
+    </>
   )
 }

@@ -84,6 +84,15 @@ const LiveCameraView = forwardRef(function LiveCameraView(props, ref) {
 
     try {
       // 1. Acquire webcam stream
+      // Guard: navigator.mediaDevices is only available in secure contexts (HTTPS or localhost).
+      // On plain HTTP to a remote host, it is undefined — give the user a clear error.
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error(
+          'Camera access requires a secure context (HTTPS). ' +
+          'Your browser blocked getUserMedia because this page is served over plain HTTP. ' +
+          'Please access this page via HTTPS or from localhost.'
+        )
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: CAPTURE_WIDTH },

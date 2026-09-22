@@ -6,7 +6,6 @@
 
 import { useState } from 'react'
 import { Save, RotateCcw, Settings, Sliders, ToggleLeft, Palette } from 'lucide-react'
-import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Slider from '../components/ui/Slider'
@@ -89,7 +88,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <PageShell>
+    <>
       <div className="max-w-3xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -256,6 +255,6 @@ export default function SettingsPage() {
           </Button>
         </div>
       </div>
-    </PageShell>
+    </>
   )
 }

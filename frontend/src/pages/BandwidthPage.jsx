@@ -7,7 +7,6 @@
 
 import { useState, useEffect } from 'react'
 import { Wifi, WifiOff, Zap, TrendingDown, Activity, Play } from 'lucide-react'
-import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import BandwidthChart from '../components/charts/BandwidthChart'
@@ -151,7 +150,7 @@ export default function BandwidthPage() {
   const chartData = profileData[selected] ?? []
 
   return (
-    <PageShell>
+    <>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -251,7 +250,7 @@ export default function BandwidthPage() {
           </div>
         </div>
       </div>
-    </PageShell>
+    </>
   )
 }
 

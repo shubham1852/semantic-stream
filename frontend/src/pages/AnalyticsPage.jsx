@@ -8,7 +8,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { TrendingUp, Award, BarChart2, Eye, Zap, AlertCircle } from 'lucide-react'
-import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'
 import Spinner from '../components/ui/Spinner'
 import { TierBadge } from '../components/ui/Badge'
@@ -153,37 +152,37 @@ export default function AnalyticsPage() {
   }
 
   if (loading) return (
-    <PageShell>
+    <>
       <div className="flex flex-col items-center justify-center h-96 gap-4">
         <Spinner size={36} />
         <p className="text-text-muted">Loading analytics…</p>
       </div>
-    </PageShell>
+    </>
   )
 
   if (error) return (
-    <PageShell>
+    <>
       <div className="glass-card rounded-card p-8 flex flex-col items-center gap-4 text-center">
         <AlertCircle size={40} className="text-data-red" />
         <p className="text-text-muted">{error}</p>
         <a href="/upload" className="btn-primary px-6 py-2 rounded-btn text-sm">Upload a Video</a>
       </div>
-    </PageShell>
+    </>
   )
 
   if (!jobId) return (
-    <PageShell>
+    <>
       <div className="glass-card rounded-card p-12 flex flex-col items-center gap-4 text-center">
         <BarChart2 size={48} className="text-text-muted" />
         <h2 className="font-display text-xl font-semibold text-text-primary">No Analysis Selected</h2>
         <p className="text-text-muted">Upload and analyze a video to see detailed analytics.</p>
         <a href="/upload" className="btn-primary px-6 py-2 rounded-btn text-sm">Start Analysis</a>
       </div>
-    </PageShell>
+    </>
   )
 
   return (
-    <PageShell>
+    <>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -356,6 +355,6 @@ export default function AnalyticsPage() {
           </Card>
         )}
       </div>
-    </PageShell>
+    </>
   )
 }

@@ -8,7 +8,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Activity, Layers, Wifi, Clock, Film } from 'lucide-react'
-import PageShell from '../components/layout/PageShell'
 import VideoPlayer from '../components/video/VideoPlayer'
 import Card from '../components/ui/Card'
 import { StatusBadge, TierBadge } from '../components/ui/Badge'
@@ -80,7 +79,7 @@ export default function StreamingPage() {
     : null
 
   return (
-    <PageShell>
+    <>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -194,6 +193,6 @@ export default function StreamingPage() {
           </div>
         </div>
       </div>
-    </PageShell>
+    </>
   )
 }
