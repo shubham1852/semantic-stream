@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Generator, List, Optional, Tuple
+from typing import Any, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -242,11 +242,55 @@ def to_grayscale(frame: Frame) -> GrayFrame:
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
+# ── Bounding-box helpers ──────────────────────────────────────────────────────
+
+def bbox_mask(
+    shape: Tuple[int, int],
+    boxes: List[Tuple[int, int, int, int]],
+) -> np.ndarray:
+    """Create a binary mask from a list of (x1, y1, x2, y2) bounding boxes.
+
+    Parameters
+    ----------
+    shape:
+        (height, width) of the output mask.
+    boxes:
+        List of pixel-space bounding boxes.
+
+    Returns
+    -------
+    uint8 array with 255 inside boxes, 0 elsewhere.
+    """
+    mask = np.zeros(shape, dtype=np.uint8)
+    for x1, y1, x2, y2 in boxes:
+        mask[y1:y2, x1:x2] = 255
+    return mask
+
+
+def mask_area_fraction(
+    mask: Any,
+    total_pixels: Optional[int] = None,
+) -> float:
+    """Fraction of *total_pixels* covered by non-zero pixels in *mask*."""
+    if mask is None:
+        return 0.0
+    if isinstance(mask, list):
+        if not mask:
+            return 0.0
+        total_area = sum(max(0, b[2] - b[0]) * max(0, b[3] - b[1]) for b in mask)
+        total = total_pixels or (640 * 480)
+        return min(1.0, float(total_area) / total)
+    total = total_pixels or (mask.shape[0] * mask.shape[1])
+    return float(np.count_nonzero(mask)) / total if total else 0.0
+
+
 # ── Text-region detection ─────────────────────────────────────────────────────
 
 def detect_text_regions(
     frame: Frame,
     min_area: int = 500,
+    *args,
+    **kwargs,
 ) -> List[Tuple[int, int, int, int]]:
     """
     Fast text region detection using gradient analysis.
@@ -257,10 +301,19 @@ def detect_text_regions(
 
     Returns list of (x1, y1, x2, y2) bounding boxes.
     """
-    import cv2  # type: ignore
-    import numpy as np
+    try:
+        import cv2  # type: ignore
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("opencv-python is required") from exc
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return []
+
+    if len(frame.shape) == 2:
+        gray = frame
+    else:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
     # ── Method: Gradient magnitude for text-like regions ─────
@@ -376,45 +429,3 @@ def histogram_distance(hist_a: np.ndarray, hist_b: np.ndarray) -> float:
         b = hist_b[i * bins : (i + 1) * bins].reshape(-1, 1).astype(np.float32)
         distances.append(cv2.compareHist(a, b, cv2.HISTCMP_BHATTACHARYYA))
     return float(np.mean(distances))
-
-
-# ── Bounding-box helpers ──────────────────────────────────────────────────────
-
-def bbox_mask(
-    shape: Tuple[int, int],
-    boxes: List[Tuple[int, int, int, int]],
-) -> np.ndarray:
-    """Create a binary mask from a list of (x1, y1, x2, y2) bounding boxes.
-
-    Parameters
-    ----------
-    shape:
-        (height, width) of the output mask.
-    boxes:
-        List of pixel-space bounding boxes.
-
-    Returns
-    -------
-    uint8 array with 255 inside boxes, 0 elsewhere.
-    """
-    mask = np.zeros(shape, dtype=np.uint8)
-    for x1, y1, x2, y2 in boxes:
-        mask[y1:y2, x1:x2] = 255
-    return mask
-
-
-def mask_area_fraction(
-    mask: Any,
-    total_pixels: Optional[int] = None,
-) -> float:
-    """Fraction of *total_pixels* covered by non-zero pixels in *mask*."""
-    if mask is None:
-        return 0.0
-    if isinstance(mask, list):
-        if not mask:
-            return 0.0
-        h = max(b[3] for b in mask) if mask else 1
-        w = max(b[2] for b in mask) if mask else 1
-        mask = bbox_mask((h, w), mask)
-    total = total_pixels or (mask.shape[0] * mask.shape[1])
-    return float(np.count_nonzero(mask)) / total if total else 0.0
