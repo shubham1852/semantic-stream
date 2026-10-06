@@ -119,6 +119,33 @@ def process_frame_with_visible_compression(
     result_f = orig_f * roi_3ch + comp_f * (1.0 - roi_3ch)
     result = np.clip(result_f, 0, 255).astype(np.uint8)
 
+    # ── STEP 4b: THERMAL-CAMERA BLENDED OVERLAY (Phase 12) ─────────────
+    # Intensity map: 30 for background (P5/blue in JET), 100 for P4, 140 for P3,
+    # 190 for P2 (warm/cyan), 255 for P1 (red).
+    intensity = np.full((h, w), 30, dtype=np.uint8)
+    for tier, value in [('P4', 100), ('P3', 140), ('P2', 190), ('P1', 255)]:
+        for det in detections:
+            p_tier = det.get('priority_tier') if isinstance(det, dict) else getattr(det, 'priority_tier', '')
+            if not p_tier:
+                p_val = det.get('priority') if isinstance(det, dict) else getattr(det, 'priority', 5)
+                p_tier = f"P{p_val}"
+            if p_tier == tier:
+                bbox = det.get('bbox') if isinstance(det, dict) else (det.x1, det.y1, det.x2, det.y2)
+                x1 = max(0, min(int(bbox[0]), w - 1))
+                y1 = max(0, min(int(bbox[1]), h - 1))
+                x2 = max(0, min(int(bbox[2]), w - 1))
+                y2 = max(0, min(int(bbox[3]), h - 1))
+                if x2 > x1 and y2 > y1:
+                    intensity[y1:y2, x1:x2] = value
+
+    colormap = cv2.applyColorMap(intensity, cv2.COLORMAP_JET)
+    alpha_thermal = 0.40
+    result = cv2.addWeighted(
+        result.astype(np.float32), 1.0 - alpha_thermal,
+        colormap.astype(np.float32), alpha_thermal,
+        0
+    ).astype(np.uint8)
+
     # ── STEP 5: DRAW BORDERS + LABELS ON COMPOSITED RESULT ─────────────
     overlay = result.copy()
     for det in sorted(detections, key=lambda d: d.get('priority', 5)):
@@ -178,9 +205,11 @@ def _normalize_detection_dict(det: Any) -> Dict[str, Any]:
         cls_name = str(det.get("class") or det.get("class_name") or "object")
         p = det.get("priority") or assign_priority(cls_name)
         bbox = det.get("bbox") or [0, 0, 0, 0]
+        p_tier = det.get("priority_tier") or f"P{p}"
         return {
             "class": cls_name,
             "priority": int(p),
+            "priority_tier": p_tier,
             "confidence": float(det.get("confidence", 1.0)),
             "bbox": [int(v) for v in bbox],
         }
@@ -188,9 +217,11 @@ def _normalize_detection_dict(det: Any) -> Dict[str, Any]:
     cls_name = str(getattr(det, "class_name", "object"))
     p = getattr(det, "priority", None) or assign_priority(cls_name)
     bbox = getattr(det, "bbox", (det.x1, det.y1, det.x2, det.y2))
+    p_tier = getattr(det, "priority_tier", f"P{p}")
     return {
         "class": cls_name,
         "priority": int(p),
+        "priority_tier": p_tier,
         "confidence": float(getattr(det, "confidence", 1.0)),
         "bbox": [int(v) for v in bbox],
     }

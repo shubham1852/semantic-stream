@@ -457,17 +457,22 @@ export default function LivePage({ onWsChange }) {
           </div>
         </Card>
 
-        {/* Right Canvas: Semantic Heatmap */}
+        {/* Right Canvas: Semantic Priority Overlay */}
         <Card className="overflow-hidden border border-slate-800 bg-[#0B0F19] flex flex-col">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 bg-[#0F1524]">
-            <div className="flex items-center gap-2">
-              <Flame size={16} className="text-[#00C8FF]" />
-              <span className="text-sm font-semibold text-text-primary font-display">
-                Semantic Priority Heatmap
-              </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <Flame size={16} className="text-[#00C8FF]" />
+                <span className="text-sm font-semibold text-text-primary font-display">
+                  Semantic Priority Overlay
+                </span>
+              </div>
+              <p className="text-[11px] text-text-muted mt-0.5">
+                Live thermal-style view — red = protected (QP 18), blue = compressed (QP 51)
+              </p>
             </div>
             <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#00C8FF]/10 text-[#00C8FF] border border-[#00C8FF]/20">
-              Bounded Bloom · JET Background · Legend
+              LIVE OVERLAY
             </span>
           </div>
 
@@ -481,7 +486,7 @@ export default function LivePage({ onWsChange }) {
             {!isStreaming && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 text-text-muted">
                 <Flame size={38} className="text-slate-600" />
-                <p className="text-sm font-medium">Heatmap generator waiting for feed</p>
+                <p className="text-sm font-medium">Overlay generator waiting for feed</p>
               </div>
             )}
           </div>

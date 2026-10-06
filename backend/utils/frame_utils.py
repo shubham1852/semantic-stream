@@ -246,60 +246,89 @@ def to_grayscale(frame: Frame) -> GrayFrame:
 
 def detect_text_regions(
     frame: Frame,
-    min_area_frac: float = 0.001,
-    max_area_frac: float = 0.15,
-) -> np.ndarray:
-    """Return a binary mask where potential text regions are white.
-
-    Strategy
-    --------
-    1. Convert to grayscale.
-    2. Apply morphological gradient (dilation − erosion) to highlight
-       sharp intensity transitions characteristic of characters.
-    3. Threshold → find contours → keep those in the area range.
-
-    Parameters
-    ----------
-    min_area_frac / max_area_frac:
-        Contour area must be between these fractions of the total frame
-        area to be considered a text region.
-
-    Returns
-    -------
-    Binary mask (uint8 0/255), same H × W as input.
+    min_area: int = 500,
+) -> List[Tuple[int, int, int, int]]:
     """
-    try:
-        import cv2  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError("opencv-python is required") from exc
+    Fast text region detection using gradient analysis.
+    No external model required — uses OpenCV only.
+
+    Detects high-frequency regions with horizontal text structure
+    (gradients consistent with character edges).
+
+    Returns list of (x1, y1, x2, y2) bounding boxes.
+    """
+    import cv2  # type: ignore
+    import numpy as np
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    total_area = gray.shape[0] * gray.shape[1]
+    h, w = gray.shape
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    gradient = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel)
-    _, thresh = cv2.threshold(gradient, 50, 255, cv2.THRESH_BINARY)
+    # ── Method: Gradient magnitude for text-like regions ─────
+    # Text has high horizontal and vertical gradients
+    # arranged in horizontal bands
 
-    # Close small gaps → merge nearby strokes
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3))
-    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, close_kernel)
+    # Sobel gradients
+    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    gradient = np.sqrt(grad_x**2 + grad_y**2).astype(np.uint8)
 
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Threshold high-gradient pixels
+    _, thresh = cv2.threshold(gradient, 80, 255, cv2.THRESH_BINARY)
 
-    mask = np.zeros_like(gray, dtype=np.uint8)
+    # Morphological close to connect character components
+    kernel_h = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (20, 3)
+    )  # wide horizontal kernel
+    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_h)
+
+    # Dilate to merge nearby text into one region
+    kernel_d = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 5))
+    dilated = cv2.dilate(closed, kernel_d, iterations=2)
+
+    # Find contours of text candidate regions
+    contours, _ = cv2.findContours(
+        dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    text_boxes = []
     for cnt in contours:
-        area = cv2.contourArea(cnt)
-        frac = area / total_area
-        if min_area_frac <= frac <= max_area_frac:
-            cv2.drawContours(mask, [cnt], -1, 255, thickness=cv2.FILLED)
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        area = bw * bh
 
-    return mask
+        # Filter: text regions have high aspect ratio
+        # and minimum area
+        aspect = bw / max(bh, 1)
+        if area < min_area:
+            continue
+        if aspect < 2.0:
+            # Too square — likely not text, skip
+            continue
+        if bh > h * 0.4:
+            # Too tall — likely not a text line, skip
+            continue
+        if bw < 30:
+            # Too narrow, skip
+            continue
+
+        text_boxes.append((x, y, x + bw, y + bh))
+
+    return text_boxes
+
+
+def detect_text_mask(frame: Frame, min_area: int = 500) -> np.ndarray:
+    """Return a binary mask (uint8 0/255) of detected text regions."""
+    boxes = detect_text_regions(frame, min_area=min_area)
+    return bbox_mask(frame.shape[:2], boxes)
 
 
 def text_area_fraction(frame: Frame) -> float:
     """Return the fraction of the frame covered by detected text regions."""
-    mask = detect_text_regions(frame)
-    total = mask.shape[0] * mask.shape[1]
+    boxes = detect_text_regions(frame)
+    if not boxes:
+        return 0.0
+    h, w = frame.shape[:2]
+    mask = bbox_mask((h, w), boxes)
+    total = h * w
     return float(np.count_nonzero(mask)) / total if total else 0.0
 
 
@@ -375,9 +404,17 @@ def bbox_mask(
 
 
 def mask_area_fraction(
-    mask: np.ndarray,
+    mask: Any,
     total_pixels: Optional[int] = None,
 ) -> float:
     """Fraction of *total_pixels* covered by non-zero pixels in *mask*."""
+    if mask is None:
+        return 0.0
+    if isinstance(mask, list):
+        if not mask:
+            return 0.0
+        h = max(b[3] for b in mask) if mask else 1
+        w = max(b[2] for b in mask) if mask else 1
+        mask = bbox_mask((h, w), mask)
     total = total_pixels or (mask.shape[0] * mask.shape[1])
     return float(np.count_nonzero(mask)) / total if total else 0.0

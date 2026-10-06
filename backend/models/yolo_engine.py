@@ -88,27 +88,87 @@ class Detection:
         return ((self.x1 + self.x2) // 2, (self.y1 + self.y2) // 2)
 
 
+# ── Detection sensitivity & tier configuration ────────────────────────────────
+
+DETECTION_CONFIG = {
+    "conf_threshold_p1": 0.30,  # persons: catch even partial
+    "conf_threshold_p2": 0.35,  # screens, books, animals: moderate
+    "conf_threshold_p3": 0.40,  # motion objects, vehicles, electronics
+    "conf_threshold_p4": 0.45,  # background objects
+    "nms_threshold": 0.50,      # allow nearby boxes (was 0.45)
+    "max_detections": 20,       # allow up to 20 objects per frame
+}
+
+BBOX_PADDING = {
+    "P1": 8,   # person — add 8px padding all sides
+    "P2": 4,   # text/screen — small padding
+    "P3": 4,   # vehicles/motion — moderate padding
+    "P4": 2,   # objects
+    "P5": 0,
+}
+
+
+def pad_detection(det, padding: int, frame_h: int, frame_w: int):
+    """Pad detection bounding box to avoid clipping full object / body."""
+    p = padding
+    if isinstance(det, dict):
+        bbox = det.get("bbox", [0, 0, 0, 0])
+        x1 = max(0, int(bbox[0]) - p)
+        y1 = max(0, int(bbox[1]) - p)
+        x2 = min(frame_w, int(bbox[2]) + p)
+        y2 = min(frame_h, int(bbox[3]) + p)
+        det["bbox"] = [x1, y1, x2, y2]
+        return det
+    det.x1 = max(0, det.x1 - p)
+    det.y1 = max(0, det.y1 - p)
+    det.x2 = min(frame_w, det.x2 + p)
+    det.y2 = min(frame_h, det.y2 + p)
+    return det
+
+
+def enhance_frame_for_detection(frame_bgr: np.ndarray) -> np.ndarray:
+    """CLAHE enhancement for better detection in dim/flat lighting."""
+    import cv2
+    lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    l_eq = clahe.apply(l)
+    enhanced = cv2.merge([l_eq, a, b])
+    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+
 # ── Live detection tier mapping ───────────────────────────────────────────────
 
 LIVE_DETECTION_CLASSES = {
     0: ("person", "P1"),      # Highest priority
     56: ("chair", "P4"),
     57: ("couch", "P4"),
-    63: ("laptop", "P4"),
+    63: ("laptop", "P3"),
     64: ("mouse", "P4"),
     65: ("remote", "P4"),
     66: ("keyboard", "P4"),
-    67: ("cell phone", "P4"),
-    73: ("book", "P4"),
+    67: ("cell phone", "P3"),
+    73: ("book", "P3"),
 }
 
 
 def get_priority_tier(class_id: int, class_name: str = "") -> str:
     """Map YOLO class to SemanticStream priority tier."""
-    person_classes = {0, 1}  # person, bicycle
-    cname = (class_name or "").lower()
-    if class_id in person_classes or "person" in cname or "face" in cname:
+    cname = (class_name or "").lower().strip()
+    if class_id == 0 or "person" in cname or "face" in cname:
         return "P1"
+    # P2: Animals & text
+    if class_id in range(14, 24) or cname in {
+        "cat", "dog", "bird", "horse", "cow", "sheep",
+        "elephant", "bear", "zebra", "giraffe", "text"
+    }:
+        return "P2"
+    # P3: Vehicles & screens / books / phones
+    if class_id in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 62, 63, 67, 72, 73} or cname in {
+        "car", "truck", "bus", "motorcycle", "bicycle",
+        "traffic light", "stop sign", "laptop", "cell phone", "tv", "book"
+    }:
+        return "P3"
     return "P4"
 
 
@@ -157,7 +217,7 @@ class YOLOEngine:
         self,
         model_path: Optional[str] = None,
         confidence_threshold: float = settings.CONFIDENCE_THRESHOLD,
-        nms_threshold: float = settings.NMS_THRESHOLD,
+        nms_threshold: float = DETECTION_CONFIG["nms_threshold"],
     ) -> None:
         raw_path = str(model_path or settings.YOLO_MODEL_PATH)
         path_obj = Path(raw_path)
@@ -288,6 +348,7 @@ class YOLOEngine:
         self,
         frame_bgr: np.ndarray,
         conf_threshold: Optional[float] = None,
+        mode: str = "video",
     ) -> List[Detection]:
         """Run detection on a single BGR frame with real ONNX/DNN inference.
 
@@ -305,7 +366,8 @@ class YOLOEngine:
 
         t0 = time.perf_counter()
         try:
-            blob, scale_x, scale_y = self._preprocess(frame_bgr)
+            enhanced_frame = enhance_frame_for_detection(frame_bgr)
+            blob, scale_x, scale_y = self._preprocess(enhanced_frame)
             if self._session is not None:
                 raw = self._session.run(None, {self._input_name: blob})[0]
             else:
@@ -424,7 +486,7 @@ class YOLOEngine:
         """
         import cv2  # type: ignore
 
-        thresh = conf_threshold if conf_threshold is not None else self._conf_threshold
+        thresh = conf_threshold if conf_threshold is not None else DETECTION_CONFIG["conf_threshold_p1"]
 
         output = raw[0].T  # (num_anchors, 84)
         class_scores = output[:, 4:]
@@ -476,6 +538,21 @@ class YOLOEngine:
         for i in indices.flatten():
             bx, by, bw, bh = boxes[i]
             cid = class_ids[i]
+            score = scores[i]
+            cname = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"cls_{cid}"
+            tier = get_priority_tier(cid, cname)
+
+            # Per-tier confidence threshold check when no global override is provided
+            if conf_threshold is None:
+                req_thresh = {
+                    "P1": DETECTION_CONFIG["conf_threshold_p1"],
+                    "P2": DETECTION_CONFIG["conf_threshold_p2"],
+                    "P3": DETECTION_CONFIG["conf_threshold_p3"],
+                    "P4": DETECTION_CONFIG["conf_threshold_p4"],
+                }.get(tier, 0.45)
+                if score < req_thresh:
+                    continue
+
             x1 = max(0, int(bx * scale_x))
             y1 = max(0, int(by * scale_y))
             x2 = int((bx + bw) * scale_x)
@@ -487,13 +564,10 @@ class YOLOEngine:
             if frame_area > 0 and box_area >= max_area_ratio * frame_area:
                 continue
 
-            cname = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"cls_{cid}"
-            tier = get_priority_tier(cid, cname)
-
             det = Detection(
                 class_id=cid,
                 class_name=cname,
-                confidence=scores[i],
+                confidence=score,
                 x1=x1,
                 y1=y1,
                 x2=x2,
@@ -502,7 +576,7 @@ class YOLOEngine:
             )
             detections.append(det)
 
-        return detections
+        return detections[:DETECTION_CONFIG["max_detections"]]
 
     # ── Mock mode ─────────────────────────────────────────────────────────────
 

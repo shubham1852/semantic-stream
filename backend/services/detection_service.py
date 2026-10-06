@@ -35,8 +35,15 @@ import numpy as np
 from backend.core.config import settings
 from backend.core.exceptions import VideoNotFoundError
 from backend.core.logging_config import get_logger
-from backend.models.yolo_engine import Detection, yolo_engine
+from backend.models.yolo_engine import (
+    BBOX_PADDING,
+    Detection,
+    enhance_frame_for_detection,
+    pad_detection,
+    yolo_engine,
+)
 from backend.utils.frame_utils import (
+    bbox_mask,
     compute_histogram,
     compute_optical_flow,
     detect_text_regions,
@@ -64,11 +71,20 @@ from backend.utils.qp_utils import (
 
 log = get_logger(__name__)
 
+# ── Inference size configuration (Section 3) ──────────────────────────────────
+LIVE_INFERENCE_SIZE = 416    # fast for live camera
+VIDEO_INFERENCE_SIZE = 640   # accurate for uploaded video
+
+
+def get_inference_size(mode: str = 'live') -> int:
+    return LIVE_INFERENCE_SIZE if mode == 'live' else VIDEO_INFERENCE_SIZE
+
 
 # ── Canonical Priority Classification (Phase 10) ─────────────────────────────
 
 PRIORITY_MAP = {
     "person": 1, "face": 1,
+    "text": 2,
     "cat": 2, "dog": 2, "bird": 2, "horse": 2, "cow": 2,
     "sheep": 2, "elephant": 2, "bear": 2, "zebra": 2, "giraffe": 2,
     "car": 3, "truck": 3, "bus": 3, "motorcycle": 3, "bicycle": 3,
@@ -189,6 +205,7 @@ class DetectionService:
         job_id: str = "default",
         reference_frame: Optional[np.ndarray] = None,
         confidence_threshold: Optional[float] = None,
+        mode: str = "video",
     ) -> FrameAnalysisResult:
         """Run the full 5-tier pipeline on a single frame.
 
@@ -209,6 +226,8 @@ class DetectionService:
         confidence_threshold:
             Override detection confidence threshold. Defaults to
             ``settings.CONFIDENCE_THRESHOLD``.
+        mode:
+            Inference mode: 'video' (640) or 'live' (416).
 
         Returns
         -------
@@ -224,8 +243,9 @@ class DetectionService:
 
         # ── 1. YOLO detection ──────────────────────────────────────────────
         t_inf = time.perf_counter()
+        yolo_failed = False
         try:
-            detections = yolo_engine.detect(frame_bgr)
+            detections = yolo_engine.detect(frame_bgr, mode=mode)
             if confidence_threshold is not None:
                 detections = [
                     d for d in detections
@@ -238,6 +258,44 @@ class DetectionService:
         except Exception as exc:
             log.warning("detection_failed", frame=frame_number, error=str(exc))
             detections = []
+            yolo_failed = True
+
+        # ── 2. Text region detection & P2 protection (Section 2) ───────────
+        text_mask = None
+        if not yolo_failed:
+            try:
+                text_regions = detect_text_regions(frame_bgr)
+                # Create synthetic P2 detections for text regions
+                for (x1, y1, x2, y2) in text_regions:
+                    if confidence_threshold is not None and 0.75 < confidence_threshold:
+                        continue
+                    overlaps_person = any(
+                        det.priority_tier == 'P1' and
+                        x1 >= det.x1 - 20 and x2 <= det.x2 + 20 and
+                        y1 >= det.y1 - 20 and y2 <= det.y2 + 20
+                        for det in detections
+                    )
+                    if not overlaps_person:
+                        text_det = Detection(
+                            class_name='text',
+                            class_id=-1,        # synthetic, not a YOLO class
+                            priority_tier='P2',
+                            confidence=0.75,    # fixed confidence for display
+                            x1=x1, y1=y1,
+                            x2=x2, y2=y2,
+                        )
+                        detections.append(text_det)
+                text_mask = bbox_mask((h, w), text_regions)
+                result.text_area_frac = mask_area_fraction(text_mask)
+            except Exception as exc:
+                log.debug("text_detection_failed", error=str(exc))
+                text_mask = None
+                result.text_area_frac = 0.0
+
+        # ── Apply bounding box padding (Section 3 Change 4) ────────────────
+        for d in detections:
+            pad = BBOX_PADDING.get(d.priority_tier, 0)
+            pad_detection(d, pad, h, w)
 
         result.detections = detections
         result.detection_confidence = (
@@ -245,15 +303,6 @@ class DetectionService:
             if detections else 0.0
         )
         result.inference_ms = (time.perf_counter() - t_inf) * 1000
-
-        # ── 2. Text region detection ───────────────────────────────────────
-        try:
-            text_mask = detect_text_regions(frame_bgr)
-            result.text_area_frac = mask_area_fraction(text_mask)
-        except Exception as exc:
-            log.debug("text_detection_failed", error=str(exc))
-            text_mask = None
-            result.text_area_frac = 0.0
 
         # ── 3. Optical flow (motion) ───────────────────────────────────────
         flow_mask: Optional[np.ndarray] = None
@@ -419,6 +468,7 @@ class DetectionService:
                     job_id=job_id,
                     reference_frame=compressed_ref,
                     confidence_threshold=confidence_threshold,
+                    mode="video",
                 )
                 frame_results.append(fr)
                 analysed += 1

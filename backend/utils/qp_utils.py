@@ -104,23 +104,32 @@ def build_priority_map(
 
     # ── P4: other YOLO detections ─────────────────────────────────────────
     for det in detections:
-        if not det.is_person:
+        p_tier = getattr(det, "priority_tier", "")
+        if not det.is_person and p_tier not in ("P1", "P2", "P3"):
             x1, y1, x2, y2 = _clamp_bbox(det.bbox, w, h)
             pmap[y1:y2, x1:x2] = np.maximum(pmap[y1:y2, x1:x2], _P4)
 
-    # ── P3: high-motion pixels ─────────────────────────────────────────────
+    # ── P3: high-motion pixels & P3 detections ─────────────────────────────
+    for det in detections:
+        if getattr(det, "priority_tier", "") == "P3":
+            x1, y1, x2, y2 = _clamp_bbox(det.bbox, w, h)
+            pmap[y1:y2, x1:x2] = np.maximum(pmap[y1:y2, x1:x2], _P3)
     if flow_mask is not None:
         motion_bool = (flow_mask > 0).astype(bool)
         pmap[motion_bool] = np.maximum(pmap[motion_bool], _P3)
 
-    # ── P2: text regions ───────────────────────────────────────────────────
+    # ── P2: text regions & P2 detections (animals / text) ─────────────────
+    for det in detections:
+        if getattr(det, "priority_tier", "") == "P2":
+            x1, y1, x2, y2 = _clamp_bbox(det.bbox, w, h)
+            pmap[y1:y2, x1:x2] = np.maximum(pmap[y1:y2, x1:x2], _P2)
     if text_mask is not None:
         text_bool = (text_mask > 0).astype(bool)
         pmap[text_bool] = np.maximum(pmap[text_bool], _P2)
 
     # ── P1: persons / faces ────────────────────────────────────────────────
     for det in detections:
-        if det.is_person:
+        if det.is_person or getattr(det, "priority_tier", "") == "P1":
             x1, y1, x2, y2 = _clamp_bbox(det.bbox, w, h)
             pmap[y1:y2, x1:x2] = np.maximum(pmap[y1:y2, x1:x2], _P1)
 
