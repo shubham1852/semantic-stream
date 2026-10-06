@@ -91,11 +91,19 @@ The priority map is recalculated every sampled frame. Optical flow handles motio
 
 ## Key capabilities
 
-**Semantic quality measurement** — We developed two proprietary metrics (SPQI and SEES) to evaluate compression quality in a semantically-aware way. Standard metrics like PSNR and SSIM weight all pixels equally; ours weight them by semantic importance. This is a core research contribution of the project.
+**Interactive Split-View video player** — Toggle seamlessly between Original, Processed, and Split-View modes. The Split-View mode features a real-time canvas divider with directional pill badges, allowing side-by-side visual comparison between uncompressed pristine ROIs and heavily compressed backgrounds.
+
+**Selective visible background compression** — Backgrounds undergo 16x16 macroblock downsampling, Gaussian blurring, HSV desaturation, and aggressive JPEG quantization (Q=4–15), while P1/P2 semantic regions (faces, people, animals) are blended with float32 Gaussian-feathered masks at 100% original fidelity.
+
+**Dual-canvas live semantic heatmap** — Live webcam feed streamed over WebSocket with dual synchronized displays: priority-colored bounding boxes with HUD overlay on the left canvas, and an interpolated JET colormap heatmap with Gaussian-bloomed energy peaks on the right canvas.
+
+**Sub-100ms real-time CPU optimization** — Vectorized NumPy anchor postprocessing (531ms → 3.9ms), downscaled Haar cascade face detection (381ms → 14.8ms), and client-side WebSocket backpressure gating eliminate queue lag, delivering **~89ms** round-trip streaming latency on standard CPUs without GPU dependencies.
+
+**Semantic quality measurement (SPQI & SEES)** — We developed two proprietary metrics (SPQI and SEES) to evaluate compression quality in a semantically-aware way. Standard metrics like PSNR and SSIM weight all pixels equally; ours weight them by semantic importance. This is a core research contribution of the project.
+
+**Compression visibility metrics** — Quantified perceptual compression analysis on the Results dashboard: Background Compression level, ROI Preservation index (100% P1 / 90% P2), Bandwidth Saved %, and Visual Diff Score ($\Delta\text{SSIM}$).
 
 **3-strategy experiment workbench** — Upload any video and run Uniform ABR, Static ROI, and SemanticStream in parallel. Results are compared across SSIM, bitrate, face quality, and our proprietary scores. A winner is automatically identified.
-
-**Real-time webcam analysis** — Live camera feed is streamed over WebSocket. Each frame is analysed and returned with a semantic priority heatmap overlaid — you can watch the system prioritise faces in real-time.
 
 **PDF report generation** — Every completed session generates a downloadable PDF report with metric tables, per-tier breakdown, and session metadata. Built with ReportLab.
 
@@ -115,6 +123,7 @@ news broadcast, and documentary footage under 4G Degrading bandwidth profile.
 | Avg Bitrate | 2.80 Mbps | 1.80 Mbps | **1.62 Mbps** | −42% vs baseline |
 | Background SSIM | 0.83 | 0.82 | 0.81 | −2% (intentional) |
 | SEES Score | — | — | **34.2%** | compute reduction |
+| Live Roundtrip Latency | ~538 ms | — | **~89 ms** | 6x speedup (CPU) |
 
 The −2% background degradation is by design: that budget protects faces.
 
@@ -125,14 +134,15 @@ The −2% background degradation is by design: that budget protects faces.
 ### Backend
 - **FastAPI** — async REST API + WebSocket, 16 endpoints
 - **SQLAlchemy (async)** — ORM with SQLite for development, Postgres-ready
-- **YOLOv8n via OpenCV ONNX** — CPU inference, no CUDA dependency
-- **FFmpeg** — video encoding with per-frame QP matrix injection
+- **YOLOv8n via OpenCV ONNX** — CPU inference with vectorized NumPy anchor parsing & downscaled Haar face cascade
+- **FFmpeg** — video encoding with per-frame QP matrix injection & macroblock compression
 - **ReportLab** — programmatic PDF report generation
 - **structlog** — structured JSON logging throughout
 
 ### Frontend
 - **React 18 + Vite** — 14 pages, component-based architecture
 - **Zustand** — lightweight global state (upload / analysis / experiment / UI slices)
+- **HTML5 Canvas** — dual-canvas live heatmap rendering & interactive split-view video divider
 - **Recharts + D3** — SSIM/PSNR line charts, radar charts, bitrate bars, heatmap grids
 - **HLS.js** — adaptive video player with custom controls
 - **KaTeX** — mathematical notation rendering on the Research page

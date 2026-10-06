@@ -221,79 +221,52 @@ async def live_stream_websocket(websocket: WebSocket) -> None:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 80), 1, cv2.LINE_AA)
             annotated = cv2.addWeighted(annotated, 0.08, hud_overlay, 0.92, 0)
 
-            # ── Step 4 — FIX 1: HEATMAP: spatially accurate, bounded bloom + JET always visible ─────
-            heatmap_canvas = np.zeros((h, w, 3), dtype=np.float32)
+            # ── Step 4 — Clean JET filled-box priority heatmap (no optical flow, no contours) ─────
+            #
+            # Values in the grayscale heatmap map to JET colormap as:
+            #   25  → deep blue  (P5 background)
+            #   100 → cyan/green (P4 objects)
+            #   150 → yellow     (P3 motion)
+            #   200 → orange     (P2 high priority)
+            #   255 → red        (P1 person) — drawn LAST so always on top
 
-            # Step 1: JET colormap on grayscale frame as background texture
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray_eq = cv2.equalizeHist(gray)
-            jet_bg = cv2.applyColorMap(gray_eq, cv2.COLORMAP_JET).astype(np.float32)
+            heatmap_gray = np.full((h, w), 25, dtype=np.uint8)  # start: all P5 = blue
 
-            # Step 2: Draw each detected region with bounded Gaussian bloom
-            # Sort so P5/P4 drawn first, P1 drawn last (P1 always on top)
-            sorted_dets = sorted(detections, key=lambda d: d.get("priority", 5), reverse=True)
-
-            for det in sorted_dets:
+            # Draw tiers low→high so higher priority overwrites lower
+            for det in detections:
                 priority = det.get("priority", 5)
-                if priority == 5:
-                    continue  # background not drawn on heatmap
-                color_bgr = np.array(PRIORITY_COLORS_BGR[priority], dtype=np.float32)
-                x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(w, x2), min(h, y2)
-                if x2 <= x1 or y2 <= y1:
-                    continue
+                if priority == 4:
+                    x1, y1, x2, y2 = [max(0, int(det["bbox"][0])), max(0, int(det["bbox"][1])),
+                                       min(w, int(det["bbox"][2])), min(h, int(det["bbox"][3]))]
+                    cv2.rectangle(heatmap_gray, (x1, y1), (x2, y2), 100, -1)  # filled
 
-                # Intensity by priority
-                intensity_map = {1: 1.0, 2: 0.85, 3: 0.65, 4: 0.40}
-                intensity = intensity_map.get(priority, 0.3)
+            for det in detections:
+                priority = det.get("priority", 5)
+                if priority == 3:
+                    x1, y1, x2, y2 = [max(0, int(det["bbox"][0])), max(0, int(det["bbox"][1])),
+                                       min(w, int(det["bbox"][2])), min(h, int(det["bbox"][3]))]
+                    cv2.rectangle(heatmap_gray, (x1, y1), (x2, y2), 150, -1)
 
-                # Create a LOCAL bloom region with 15% padding around the box
-                pad_x = max(8, int((x2 - x1) * 0.15))
-                pad_y = max(8, int((y2 - y1) * 0.15))
-                rx1, ry1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
-                rx2, ry2 = min(w, x2 + pad_x), min(h, y2 + pad_y)
+            for det in detections:
+                priority = det.get("priority", 5)
+                if priority == 2:
+                    x1, y1, x2, y2 = [max(0, int(det["bbox"][0])), max(0, int(det["bbox"][1])),
+                                       min(w, int(det["bbox"][2])), min(h, int(det["bbox"][3]))]
+                    cv2.rectangle(heatmap_gray, (x1, y1), (x2, y2), 200, -1)
 
-                # Fill a LOCAL canvas only for this region
-                local_h = ry2 - ry1
-                local_w = rx2 - rx1
-                if local_h <= 0 or local_w <= 0:
-                    continue
+            # P1 person drawn LAST — always on top, always solid red
+            for det in detections:
+                priority = det.get("priority", 5)
+                if priority == 1:
+                    x1, y1, x2, y2 = [max(0, int(det["bbox"][0])), max(0, int(det["bbox"][1])),
+                                       min(w, int(det["bbox"][2])), min(h, int(det["bbox"][3]))]
+                    cv2.rectangle(heatmap_gray, (x1, y1), (x2, y2), 255, -1)
 
-                local_region = np.zeros((local_h, local_w, 3), dtype=np.float32)
-                # Fill the actual bounding box area inside local canvas
-                lx1 = x1 - rx1
-                ly1 = y1 - ry1
-                lx2 = x2 - rx1
-                ly2 = y2 - ry1
-                local_region[ly1:ly2, lx1:lx2] = color_bgr * intensity
+            # Apply JET colormap → blue background, warm objects, red for person
+            heatmap_final = cv2.applyColorMap(heatmap_gray, cv2.COLORMAP_JET)
 
-                # Blur ONLY within this local region (kernel max 1/3 of region size)
-                kw = min(31, local_w // 3 * 2 + 1)
-                kh = min(31, local_h // 3 * 2 + 1)
-                kw = kw if kw % 2 == 1 else kw + 1
-                kh = kh if kh % 2 == 1 else kh + 1
-                if kw >= 3 and kh >= 3:
-                    local_region = cv2.GaussianBlur(local_region, (kw, kh), 0)
-
-                # Blend into main heatmap canvas
-                heatmap_canvas[ry1:ry2, rx1:rx2] = np.maximum(
-                    heatmap_canvas[ry1:ry2, rx1:rx2],
-                    local_region
-                )
-
-            # Step 3: Blend heatmap over JET background so JET texture always shows through
-            jet_base = jet_bg * 0.35  # always-visible JET floor
-
-            # For each pixel: if heatmap has data, show 65% heatmap + 35% jet
-            # If heatmap is empty (background), show 100% jet at 35%
-            heatmap_blend = np.where(
-                heatmap_canvas > 10,                        # has detection color
-                heatmap_canvas * 0.65 + jet_base * 0.35,   # blend detection + jet
-                jet_base                                     # pure jet for empty areas
-            )
-            heatmap_final = np.clip(heatmap_blend, 0, 255).astype(np.uint8)
-
+            # Draw thin border outlines over the filled boxes for crisp separation
+            sorted_dets = sorted(detections, key=lambda d: d.get("priority", 5), reverse=True)
             for det in sorted_dets:
                 priority = det.get("priority", 5)
                 if priority == 5:
@@ -309,18 +282,32 @@ async def live_stream_websocket(websocket: WebSocket) -> None:
                     [int(c) for c in color_bgr], thick
                 )
 
-            # Add heatmap legend bar at bottom (20px strip)
+            # Legend bar at bottom (20px strip)
             legend_bar = np.zeros((20, w, 3), dtype=np.uint8)
             legend_items = [
-                ((80, 255, 0), "P1 Human"), ((255, 200, 0), "P2 Animal"),
-                ((255, 140, 0), "P3 Vehicle"), ((255, 60, 0), "P4 Object"),
+                ((0, 0, 255),   "P5 Background"),
+                ((255, 200, 0), "P4 Object"),
+                ((255, 140, 0), "P3 Motion"),
+                ((0, 128, 255), "P2 High-Pri"),
+                ((0, 0, 200),   "P1 Person"),
             ]
             section_w = w // len(legend_items)
-            for i, (color, label) in enumerate(legend_items):
+            # Use JET colours that match the actual map values
+            jet_legend = [
+                (cv2.applyColorMap(np.array([[25]], dtype=np.uint8), cv2.COLORMAP_JET)[0][0].tolist(),  "P5 BG"),
+                (cv2.applyColorMap(np.array([[100]], dtype=np.uint8), cv2.COLORMAP_JET)[0][0].tolist(), "P4 Obj"),
+                (cv2.applyColorMap(np.array([[150]], dtype=np.uint8), cv2.COLORMAP_JET)[0][0].tolist(), "P3 Motion"),
+                (cv2.applyColorMap(np.array([[200]], dtype=np.uint8), cv2.COLORMAP_JET)[0][0].tolist(), "P2 Hi-Pri"),
+                (cv2.applyColorMap(np.array([[255]], dtype=np.uint8), cv2.COLORMAP_JET)[0][0].tolist(), "P1 Person"),
+            ]
+            for i, (lcolor, llabel) in enumerate(jet_legend):
                 sx = i * section_w
-                legend_bar[:, sx:sx + section_w] = color
-                cv2.putText(legend_bar, label, (sx + 4, 14),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 0, 0), 1, cv2.LINE_AA)
+                legend_bar[:, sx:sx + section_w] = lcolor
+                # Use black or white text based on brightness
+                brightness = 0.299 * lcolor[2] + 0.587 * lcolor[1] + 0.114 * lcolor[0]
+                txt_color = (0, 0, 0) if brightness > 128 else (255, 255, 255)
+                cv2.putText(legend_bar, llabel, (sx + 3, 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.30, txt_color, 1, cv2.LINE_AA)
             heatmap_final = np.vstack([heatmap_final, legend_bar])
 
             # Encode both frames to JPEG base64

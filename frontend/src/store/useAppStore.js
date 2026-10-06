@@ -1,13 +1,44 @@
 /**
  * store/useAppStore.js
- * Zustand global state store with three slices:
- *   - upload  : video upload flow state
- *   - analysis: current analysis job state
+ * Zustand global state store with four slices:
+ *   - upload    : video upload flow state
+ *   - analysis  : current analysis job state
  *   - experiment: current experiment state
- *   - ui      : sidebar, toasts
+ *   - settings  : user-configurable encoding + display preferences (localStorage-backed)
+ *   - ui        : sidebar, toasts
  */
 
 import { create } from 'zustand'
+
+const SETTINGS_STORAGE_KEY = 'semanticstream_settings_v2'
+
+const DEFAULT_SETTINGS = {
+  // Detection
+  confidenceThreshold: 0.45,
+  frameSampleRate: 5,
+  inferenceSize: 640,           // 416 or 640
+  // QP overrides per tier
+  qp: { P1: 18, P2: 22, P3: 26, P4: 32, P5: 40 },
+  // Bandwidth
+  defaultBandwidthProfile: 'broadband',
+  // Display
+  showBoundingBoxes: true,
+  showQpValues: true,
+  showConfidencePct: true,
+  // Features
+  enableSees: true,
+  enableSceneDetection: true,
+  darkMode: true,
+}
+
+function loadSettings() {
+  try {
+    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY)
+    return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS
+  } catch {
+    return DEFAULT_SETTINGS
+  }
+}
 
 const useAppStore = create((set, get) => ({
   // ── Upload Slice ─────────────────────────────────────────────────────────
@@ -87,6 +118,27 @@ const useAppStore = create((set, get) => ({
     set((s) => ({
       experiment: { ...s.experiment, experimentId: null, status: 'idle', results: null, error: null },
     })),
+
+  // ── Settings Slice ───────────────────────────────────────────────────────
+  settings: loadSettings(),
+  updateSettings: (partial) => {
+    set((s) => {
+      const next = { ...s.settings, ...partial }
+      try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next)) } catch { /* storage unavailable — ignore */ }
+      return { settings: next }
+    })
+  },
+  updateQp: (tier, value) => {
+    set((s) => {
+      const next = { ...s.settings, qp: { ...s.settings.qp, [tier]: value } }
+      try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next)) } catch { /* storage unavailable — ignore */ }
+      return { settings: next }
+    })
+  },
+  resetSettings: () => {
+    try { localStorage.removeItem(SETTINGS_STORAGE_KEY) } catch { /* storage unavailable — ignore */ }
+    set({ settings: DEFAULT_SETTINGS })
+  },
 
   // ── UI Slice ─────────────────────────────────────────────────────────────
   ui: {

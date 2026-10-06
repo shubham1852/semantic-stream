@@ -9,7 +9,6 @@ import 'katex/dist/katex.min.css'
 import katex from 'katex'
 import { useMemo } from 'react'
 import { Github, BookOpen, FlaskConical, Users, Award } from 'lucide-react'
-import PageShell from '../components/layout/PageShell'
 import Card from '../components/ui/Card'
 import { TierBadge } from '../components/ui/Badge'
 
@@ -113,8 +112,7 @@ function ArchitectureDiagram() {
 /* ─── Main ─────────────────────────────────────────────────── */
 export default function ResearchPage() {
   return (
-    <PageShell>
-      <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-4xl mx-auto space-y-8">
         {/* Project header */}
         <Card className="p-8">
           <div className="flex items-start justify-between">
@@ -290,6 +288,5 @@ export default function ResearchPage() {
           </div>
         </Card>
       </div>
-    </PageShell>
   )
 }
